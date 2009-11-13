@@ -1,6 +1,7 @@
 makedumpfile (1.3.5-1) UNRELEASED; urgency=low
 
   * New upstream version
+  * Preserve upstream's original makedumpfile.8 in clean target
 
  -- John Wright <jsw@debian.org>  Thu, 17 Dec 2009 15:27:30 -0700
 

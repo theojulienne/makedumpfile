@@ -17,6 +17,19 @@ override_dh_installinit:
 	# all the way until actual shutdown.
 	dh_installinit -pkdump-tools -- start 11 2 3 4 5 .
 
+# The upstream Makefile modifies makedumpfile.8 in place, so without this hack
+# (or a patch to the Makefile, which would be harder to maintain), our clean
+# target won't get us back to the original source.
+override_dh_auto_build:
+	cp makedumpfile.8 makedumpfile.8.orig
+	dh_auto_build
+
+override_dh_auto_clean:
+	if [ -f makedumpfile.8.orig ]; then \
+		mv makedumpfile.8.orig makedumpfile.8; \
+	fi
+	dh_auto_clean
+
 guilt-patches:
 	dh_testdir
 	dh_quilt_unpatch
