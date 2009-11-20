@@ -419,7 +419,7 @@ function kdump_save_core()
 		return 0;
 	else
 		log_failure_msg "$NAME: failed to save vmcore in $KDUMP_STAMPDIR"
-		logger -t $NAME "$failed to save vmcore in $KDUMP_STAMPDIR"
+		logger -t $NAME "failed to save vmcore in $KDUMP_STAMPDIR"
 		return 1;
 	fi
 }
