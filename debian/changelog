@@ -1,3 +1,9 @@
+makedumpfile (1.3.5-1) UNRELEASED; urgency=low
+
+  * New upstream version
+
+ -- John Wright <jsw@debian.org>  Thu, 17 Dec 2009 15:27:30 -0700
+
 makedumpfile (1.3.4-1) unstable; urgency=low
 
   * New upstream version.
