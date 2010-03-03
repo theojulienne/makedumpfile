@@ -8,6 +8,10 @@ makedumpfile (1.3.5-1) UNRELEASED; urgency=low
     don't need a crash kernel start address
   * Apply patch from Petter Reinholdtsen to fix incorrect dependencies
     in kdump-tools.init (Closes: #569685)
+  * Indicate support for Linux 2.6.32
+    - Although upstream hasn't updated its LATEST_VERSION macro, this
+      version works without modification on Linux 2.6.32.  Squelch a
+      warning that a 2.6.32 kernel is not supported.
 
  -- John Wright <jsw@debian.org>  Thu, 17 Dec 2009 15:27:30 -0700
 
