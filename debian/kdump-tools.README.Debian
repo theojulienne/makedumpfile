@@ -17,7 +17,7 @@ may still be required.  Specifically:
     1 (omit zero pages).
 
 2. Kdump Kernel
-    You must have a kdump kernel, which is either relocatable or build to
+    You must have a kdump kernel, which is either relocatable or built to
     start at a non-default address (which you must also set in the kernel
     command-line parameter, see below).  Linux on ia64 is always
     relocatable; recent x86, x86_64, and powerpc kernels have an option
@@ -35,16 +35,15 @@ may still be required.  Specifically:
         CONFIG_CRASH_DUMP=y
 
 3. Kernel Command line parameter
-    You must boot your kernel with a 'crashkernel=' command line parameter.
-    ia64 example:   crashkernel=384M@256M
-    x86 example:    crashkernel=64M@64M
-    x86_64 example: crashkernel=128M@64M
+    You must boot your kernel with a 'crashkernel=' command line parameter,
+    for example:
 
-    If these don't work, you can find a free section of memory by examining
-    /proc/iomem.  A good choice is probably in the same (usually very
-    large) area of System RAM that contains the kernel code, data, and bss,
-    starting at an address above all the kernel stuff.
- 
+      crashkernel=128M
+
+    That will reserve 128 MB of memory for the kdump kernel to use in case
+    of a crash.  See Documentation/kdump/kdump.txt in the Linux source for
+    more advanced crashkernel parameter syntax.
+
     You may also want to add 'nmi_watchdog=1' on certain systems.
 
 4. Debug Kernel
