@@ -315,7 +315,7 @@ read_page_desc(unsigned long long paddr, page_desc_t *pd)
 	 */
 	dh = info->dh_memory;
 	offset
-	    = (DISKDUMP_HDADER_BLOCKS + dh->sub_hdr_size + dh->bitmap_blocks)
+	    = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size + dh->bitmap_blocks)
 		* dh->block_size;
 	pfn = paddr_to_pfn(paddr);
 	desc_pos = pfn_to_pos(pfn);
@@ -871,6 +871,11 @@ get_kdump_compressed_header_info(char *filename)
 	}
 	memcpy(info->kh_memory, &kh, sizeof(kh));
 
+	if (dh.header_version >= 3) {
+		/* A dumpfile contains vmcoreinfo data. */
+		info->offset_vmcoreinfo = kh.offset_vmcoreinfo;
+		info->size_vmcoreinfo   = kh.size_vmcoreinfo;
+	}
 	return TRUE;
 error:
 	free(info->dh_memory);
@@ -3730,7 +3735,7 @@ initialize_bitmap_memory(void)
 	block_size = dh->block_size;
 
 	bitmap_offset
-	    = (DISKDUMP_HDADER_BLOCKS + dh->sub_hdr_size) * block_size;
+	    = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size) * block_size;
 	bitmap_len = block_size * dh->bitmap_blocks;
 
 	bmp = malloc(sizeof(struct dump_bitmap));
@@ -4695,7 +4700,7 @@ copy_1st_bitmap_from_memory(void)
 	off_t bitmap_offset;
 	struct disk_dump_header *dh = info->dh_memory;
 
-	bitmap_offset = (DISKDUMP_HDADER_BLOCKS + dh->sub_hdr_size)
+	bitmap_offset = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size)
 			 * dh->block_size;
 
 	if (lseek(info->fd_memory, bitmap_offset, SEEK_SET) < 0) {
@@ -5437,9 +5442,11 @@ out:
 int
 write_kdump_header(void)
 {
+	int ret = FALSE;
 	size_t size;
 	struct disk_dump_header *dh = info->dump_header;
-	struct kdump_sub_header sub_dump_header;
+	struct kdump_sub_header kh;
+	char *buf = NULL;
 
 	if (info->flag_elf_dumpfile)
 		return FALSE;
@@ -5448,13 +5455,13 @@ write_kdump_header(void)
 	 * Write common header
 	 */
 	strcpy(dh->signature, KDUMP_SIGNATURE);
-	dh->header_version = 2;
-	dh->block_size   = info->page_size;
-	dh->sub_hdr_size = KDUMP_SUB_HEADER_BLOCKS;
-	dh->max_mapnr    = info->max_mapnr;
-	dh->nr_cpus      = 1;
-	dh->bitmap_blocks
-	    = divideup(info->len_bitmap, dh->block_size);
+	dh->header_version = 3;
+  	dh->block_size     = info->page_size;
+	dh->sub_hdr_size   = sizeof(kh) + info->size_vmcoreinfo;
+	dh->sub_hdr_size   = divideup(dh->sub_hdr_size, dh->block_size);
+	dh->max_mapnr      = info->max_mapnr;
+	dh->nr_cpus        = 1;
+	dh->bitmap_blocks  = divideup(info->len_bitmap, dh->block_size);
 	memcpy(&dh->timestamp, &info->timestamp, sizeof(dh->timestamp));
 	memcpy(&dh->utsname, &info->system_utsname, sizeof(dh->utsname));
 
@@ -5466,22 +5473,57 @@ write_kdump_header(void)
 	 * Write sub header
 	 */
 	size = sizeof(struct kdump_sub_header);
-	memset(&sub_dump_header, 0, size);
-	sub_dump_header.phys_base  = info->phys_base;
-	sub_dump_header.dump_level = info->dump_level;
+	memset(&kh, 0, size);
+	kh.phys_base  = info->phys_base;
+	kh.dump_level = info->dump_level;
 	if (info->flag_split) {
-		sub_dump_header.split = 1;
-		sub_dump_header.start_pfn = info->split_start_pfn;
-		sub_dump_header.end_pfn   = info->split_end_pfn;
+		kh.split = 1;
+		kh.start_pfn = info->split_start_pfn;
+		kh.end_pfn   = info->split_end_pfn;
 	}
-	if (!write_buffer(info->fd_dumpfile, dh->block_size, &sub_dump_header,
+	if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
+		/*
+		 * Write vmcoreinfo data
+		 */
+		kh.offset_vmcoreinfo
+			= DISKDUMP_HEADER_BLOCKS * dh->block_size + sizeof(kh);
+		kh.size_vmcoreinfo = info->size_vmcoreinfo;
+
+		buf = malloc(info->size_vmcoreinfo);
+		if (buf == NULL) {
+			ERRMSG("Can't allocate memory for vmcoreinfo. %s\n",
+			    strerror(errno));
+			return FALSE;
+		}
+		if (lseek(info->fd_memory, info->offset_vmcoreinfo, SEEK_SET)
+		    < 0) {
+			ERRMSG("Can't seek the dump memory(%s). %s\n",
+			    info->name_memory, strerror(errno));
+			goto out;
+		}
+		if (read(info->fd_memory, buf, info->size_vmcoreinfo)
+		    != info->size_vmcoreinfo) {
+			ERRMSG("Can't read the dump memory(%s). %s\n",
+			    info->name_memory, strerror(errno));
+			goto out;
+		}
+		if (!write_buffer(info->fd_dumpfile, kh.offset_vmcoreinfo, buf,
+		    kh.size_vmcoreinfo, info->name_dumpfile))
+			goto out;
+	}
+	if (!write_buffer(info->fd_dumpfile, dh->block_size, &kh,
 	    size, info->name_dumpfile))
-		return FALSE;
+		goto out;
 
 	info->offset_bitmap1
-	    = (DISKDUMP_HDADER_BLOCKS + dh->sub_hdr_size) * dh->block_size;
+	    = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size) * dh->block_size;
 
-	return TRUE;
+	ret = TRUE;
+out:
+	if (buf)
+		free(buf);
+
+	return ret;
 }
 
 void
@@ -5835,7 +5877,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	 * Calculate the offset of the page data.
 	 */
 	cd_header->offset
-	    = (DISKDUMP_HDADER_BLOCKS + dh->sub_hdr_size + dh->bitmap_blocks)
+	    = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size + dh->bitmap_blocks)
 		* dh->block_size;
 	cd_page->offset = cd_header->offset + sizeof(page_desc_t)*num_dumpable;
 	offset_data  = cd_page->offset;
@@ -7022,7 +7064,7 @@ read_disk_dump_header(struct disk_dump_header *dh, char *filename)
 }
 
 int
-read_kdump_sub_header(struct kdump_sub_header *ksh, char *filename)
+read_kdump_sub_header(struct kdump_sub_header *kh, char *filename)
 {
 	int fd, ret = FALSE;
 	struct disk_dump_header dh;
@@ -7031,7 +7073,7 @@ read_kdump_sub_header(struct kdump_sub_header *ksh, char *filename)
 	if (!read_disk_dump_header(&dh, filename))
 		return FALSE;
 
-	offset = DISKDUMP_HDADER_BLOCKS * dh.block_size;
+	offset = DISKDUMP_HEADER_BLOCKS * dh.block_size;
 
 	if ((fd = open(filename, O_RDONLY)) < 0) {
 		ERRMSG("Can't open a file(%s). %s\n",
@@ -7043,7 +7085,7 @@ read_kdump_sub_header(struct kdump_sub_header *ksh, char *filename)
 		    filename, strerror(errno));
 		goto out;
 	}
-	if (read(fd, ksh, sizeof(struct kdump_sub_header))
+	if (read(fd, kh, sizeof(struct kdump_sub_header))
 	     != sizeof(struct kdump_sub_header)) {
 		ERRMSG("Can't read a file(%s). %s\n",
 		    filename, strerror(errno));
@@ -7061,7 +7103,7 @@ store_splitting_info(void)
 {
 	int i;
 	struct disk_dump_header dh, tmp_dh;
-	struct kdump_sub_header ksh;
+	struct kdump_sub_header kh;
 
 	for (i = 0; i < info->num_dumpfile; i++) {
 		if (!read_disk_dump_header(&tmp_dh, SPLITTING_DUMPFILE(i)))
@@ -7085,15 +7127,15 @@ store_splitting_info(void)
 			    SPLITTING_DUMPFILE(i));
 			return FALSE;
 		}
-		if (!read_kdump_sub_header(&ksh, SPLITTING_DUMPFILE(i)))
+		if (!read_kdump_sub_header(&kh, SPLITTING_DUMPFILE(i)))
 			return FALSE;
 
 		if (i == 0) {
-			info->dump_level = ksh.dump_level;
+			info->dump_level = kh.dump_level;
 			DEBUG_MSG("dump_level   : %d\n", info->dump_level);
 		}
-		SPLITTING_START_PFN(i) = ksh.start_pfn;
-		SPLITTING_END_PFN(i)   = ksh.end_pfn;
+		SPLITTING_START_PFN(i) = kh.start_pfn;
+		SPLITTING_END_PFN(i)   = kh.end_pfn;
 	}
 	return TRUE;
 }
@@ -7187,7 +7229,7 @@ reassemble_kdump_header(void)
 	int fd, ret = FALSE;
 	off_t offset_bitmap;
 	struct disk_dump_header dh;
-	struct kdump_sub_header ksh;
+	struct kdump_sub_header kh;
 	char *buf_bitmap;
 
 	/*
@@ -7210,19 +7252,19 @@ reassemble_kdump_header(void)
 	/*
 	 * Write sub header.
 	 */
-	if (!read_kdump_sub_header(&ksh, SPLITTING_DUMPFILE(0)))
+	if (!read_kdump_sub_header(&kh, SPLITTING_DUMPFILE(0)))
 		return FALSE;
 
-	ksh.split = 0;
-	ksh.start_pfn = 0;
-	ksh.end_pfn   = 0;
+	kh.split = 0;
+	kh.start_pfn = 0;
+	kh.end_pfn   = 0;
 
 	if (lseek(info->fd_dumpfile, info->page_size, SEEK_SET) < 0) {
 		ERRMSG("Can't seek a file(%s). %s\n",
 		    info->name_dumpfile, strerror(errno));
 		return FALSE;
 	}
-	if (write(info->fd_dumpfile, &ksh, sizeof(ksh)) != sizeof(ksh)) {
+	if (write(info->fd_dumpfile, &kh, sizeof(kh)) != sizeof(kh)) {
 		ERRMSG("Can't write a file(%s). %s\n",
 		    info->name_dumpfile, strerror(errno));
 		return FALSE;
@@ -7232,7 +7274,7 @@ reassemble_kdump_header(void)
 	 * Write dump bitmap to both a dumpfile and a bitmap file.
 	 */
 	offset_bitmap
-	    = (DISKDUMP_HDADER_BLOCKS + dh.sub_hdr_size) * dh.block_size;
+	    = (DISKDUMP_HEADER_BLOCKS + dh.sub_hdr_size) * dh.block_size;
 	info->len_bitmap = dh.bitmap_blocks * dh.block_size;
 	if ((buf_bitmap = malloc(info->len_bitmap)) == NULL) {
 		ERRMSG("Can't allcate memory for bitmap.\n");
@@ -7323,7 +7365,7 @@ reassemble_kdump_pages(void)
 	num_dumped = 0;
 
 	offset_first_ph
-	    = (DISKDUMP_HDADER_BLOCKS + dh.sub_hdr_size + dh.bitmap_blocks)
+	    = (DISKDUMP_HEADER_BLOCKS + dh.sub_hdr_size + dh.bitmap_blocks)
 		* dh.block_size;
 	cd_pd.offset    = offset_first_ph;
 	offset_data_new = offset_first_ph + sizeof(page_desc_t) * num_dumpable;

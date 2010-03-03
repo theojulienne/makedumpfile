@@ -24,8 +24,7 @@
 #define DISK_DUMP_SIGNATURE		"DISKDUMP"
 #define KDUMP_SIGNATURE			"KDUMP   "
 #define SIG_LEN (sizeof(DUMP_PARTITION_SIGNATURE) - 1)
-#define DISKDUMP_HDADER_BLOCKS		(1)
-#define KDUMP_SUB_HEADER_BLOCKS		(1)
+#define DISKDUMP_HEADER_BLOCKS		(1)
 
 #define DUMP_HEADER_COMPLETED	0
 #define DUMP_HEADER_INCOMPLETED 1
@@ -72,6 +71,8 @@ struct kdump_sub_header {
 	int		split;		/* header_version 2 and later */
 	unsigned long	start_pfn;	/* header_version 2 and later */
 	unsigned long	end_pfn;	/* header_version 2 and later */
+	off_t		offset_vmcoreinfo;/* header_version 3 and later */
+	unsigned long	size_vmcoreinfo;  /* header_version 3 and later */
 };
 
 /* page flags */
