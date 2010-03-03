@@ -2,7 +2,7 @@
 
 ### BEGIN INIT INFO
 # Provides:          kdump-tools
-# Required-Start:    $syslog $time $local_fs $remote_fs $networking
+# Required-Start:    $syslog $time $local_fs $remote_fs $network
 # Required-Stop:     $syslog
 # Default-Start:     2 3 4 5
 # Default-Stop:
