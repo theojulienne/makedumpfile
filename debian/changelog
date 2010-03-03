@@ -12,6 +12,8 @@ makedumpfile (1.3.5-1) UNRELEASED; urgency=low
     - Although upstream hasn't updated its LATEST_VERSION macro, this
       version works without modification on Linux 2.6.32.  Squelch a
       warning that a 2.6.32 kernel is not supported.
+  * Backport upstream commit 4a16bd39866093f4949f8e9dc183fa2321bda22d
+    - Fix buffer overflow when writing dh->signature
 
  -- John Wright <jsw@debian.org>  Thu, 17 Dec 2009 15:27:30 -0700
 
