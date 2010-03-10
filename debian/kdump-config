@@ -318,9 +318,8 @@ function kdump_load()
 	# Assemble the --commmand-line:
 	if [ -z "$KDUMP_CMDLINE" ] ; then
 		KDUMP_CMDLINE=`cat /proc/cmdline | \
-        	sed -e 's/crashkernel=[^ $]*//' \
-        	    -e 's/ abm=[^ $]*//' \
-        	    -e 's/^abm=[^ $]*//'`
+		sed -r -e 's/(^| )crashkernel=[^ ]*//g'
+		       -e 's/(^| )abm=[^ ]*//g'`
 	fi
 	KDUMP_CMDLINE="$KDUMP_CMDLINE $KDUMP_CMDLINE_APPEND"
 	KEXEC_CMD="$KEXEC_CMD --command-line=\"$KDUMP_CMDLINE\""
