@@ -62,7 +62,7 @@ case "$1" in
 	exit $?
 	;;
   *)
-	echo $"Usage: $0 {start|stop|status|restart|force-reload}"
+	echo "Usage: $0 {start|stop|status|restart|force-reload}"
 	exit 1
 esac
 
