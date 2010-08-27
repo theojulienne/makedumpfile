@@ -200,9 +200,9 @@ function locate_debug_kernel()
 
 	# 3: give up :)
 	else
-		log_failure_msg "could not find an installed debug vmlinux image and"
-		log_failure_msg "DEBUG_KERNEL is not specified in $KDUMP_DEFAULTS"
-		log_failure_msg "Warning: makedumpfile will be limited to -d 1."
+		echo "Could not find an installed debug vmlinux image and"
+		echo "DEBUG_KERNEL is not specified in $KDUMP_DEFAULTS"
+		log_warning_msg "makedumpfile may be limited to -d 1"
 		return 1;
 	fi
 
