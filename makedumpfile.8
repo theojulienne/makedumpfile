@@ -1,4 +1,4 @@
-.TH MAKEDUMPFILE 8 "11 November 2009" "makedumpfile v1.3.5" "Linux System Administrator's Manual"
+.TH MAKEDUMPFILE 8 "16 November 2010" "makedumpfile v1.3.7" "Linux System Administrator's Manual"
 .SH NAME
 makedumpfile \- make a small dumpfile of kdump
 .SH SYNOPSIS
@@ -452,6 +452,18 @@ Show help message.
 .TP
 \fB\-v\fR
 Show the version of makedumpfile.
+
+.SH ENVIRONMENT VARIABLES
+
+.TP 8
+.B TMPDIR
+This environment variable is for a temporary memory bitmap file.
+If your machine has a lots of memory and you use tmpfs on /tmp, makedumpfile 
+can fail for a little memory in the 2nd kernel because makedumpfile makes a 
+very large temporary memory bitmap file in this case. To avoid this failure, 
+you can set a TMPDIR environment variable. If you do not set a TMPDIR 
+environment variable, makedumpfile uses /tmp directory for a temporary 
+bitmap file as a default.
 
 .SH DIAGNOSTICS
 makedumpfile exits with the following value.

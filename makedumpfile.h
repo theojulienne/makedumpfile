@@ -112,8 +112,6 @@ isAnon(unsigned long mapping)
 #define PAGEOFFSET(X)		(((unsigned long)(X)) & (PAGESIZE() - 1))
 #define PAGEBASE(X)		(((unsigned long)(X)) & ~(PAGESIZE() - 1))
 #define _2MB_PAGE_MASK		(~((2*1048576)-1))
-#define paddr_to_pfn(X)		((unsigned long long)(X) >> PAGESHIFT())
-#define pfn_to_paddr(X)		((unsigned long long)(X) << PAGESHIFT())
 
 /*
  * for SPARSEMEM
@@ -230,7 +228,7 @@ do { \
 #define BUFSIZE_FGETS		(1500)
 #define BUFSIZE_BITMAP		(4096)
 #define PFN_BUFBITMAP		(BITPERBYTE*BUFSIZE_BITMAP)
-#define FILENAME_BITMAP		"/tmp/kdump_bitmapXXXXXX"
+#define FILENAME_BITMAP		"kdump_bitmapXXXXXX"
 #define FILENAME_STDOUT		"STDOUT"
 
 /*
@@ -449,7 +447,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(2, 6, 31)/* linux-2.6.31 */
+#define LATEST_VERSION		KERNEL_VERSION(2, 6, 36)/* linux-2.6.36 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -507,6 +505,23 @@ do { \
 #define VMALLOC_END		(info->vmalloc_end)
 #define VMEMMAP_START		(info->vmemmap_start)
 #define VMEMMAP_END		(info->vmemmap_end)
+
+#ifdef __arm__
+#define KVBASE_MASK		(0xffff)
+#define KVBASE			(SYMBOL(_stext) & ~KVBASE_MASK)
+#define _SECTION_SIZE_BITS	(28)
+#define _MAX_PHYSMEM_BITS	(32)
+#define ARCH_PFN_OFFSET		(info->phys_base >> PAGESHIFT())
+
+#define PTRS_PER_PTE		(512)
+#define PGDIR_SHIFT		(21)
+#define PMD_SHIFT		(21)
+#define PMD_SIZE		(1UL << PMD_SHIFT)
+#define PMD_MASK		(~(PMD_SIZE - 1))
+
+#define _PAGE_PRESENT		(1 << 0)
+
+#endif /* arm */
 
 #ifdef __x86__
 #define __PAGE_OFFSET		(0xc0000000)
@@ -597,6 +612,45 @@ do { \
 #define _MAX_PHYSMEM_BITS	(44)
 #endif
 
+#ifdef __s390x__
+#define __PAGE_OFFSET		(info->page_size - 1)
+#define KERNELBASE		(0)
+#define KVBASE			(SYMBOL(_stext))
+#define _SECTION_SIZE_BITS	(28)
+#define _MAX_PHYSMEM_BITS	(42)
+
+/* Bits in the segment/region table address-space-control-element */
+#define _ASCE_TYPE_MASK		0x0c
+#define _ASCE_TABLE_LENGTH	0x03	/* region table length  */
+
+#define TABLE_LEVEL(x)		(((x) & _ASCE_TYPE_MASK) >> 2)
+#define TABLE_LENGTH(x)		((x) & _ASCE_TABLE_LENGTH)
+
+/* Bits in the region table entry */
+#define _REGION_ENTRY_ORIGIN	~0xfffUL	/* region table origin*/
+#define _REGION_ENTRY_TYPE_MASK	0x0c	/* region table type mask */
+#define _REGION_ENTRY_INVALID	0x20	/* invalid region table entry */
+#define _REGION_ENTRY_LENGTH	0x03	/* region table length */
+#define _REGION_OFFSET_MASK	0x7ffUL	/* region/segment table offset mask */
+
+#define RSG_TABLE_LEVEL(x)	(((x) & _REGION_ENTRY_TYPE_MASK) >> 2)
+#define RSG_TABLE_LENGTH(x)	((x) & _REGION_ENTRY_LENGTH)
+
+/* Bits in the segment table entry */
+#define _SEGMENT_ENTRY_ORIGIN	~0x7ffUL
+#define _SEGMENT_ENTRY_LARGE	0x400
+#define _SEGMENT_PAGE_SHIFT	31
+#define _SEGMENT_INDEX_SHIFT	20
+
+/* Hardware bits in the page table entry */
+#define _PAGE_CO		0x100	/* HW Change-bit override */
+#define _PAGE_ZERO		0x800	/* Bit pos 52 must conatin zero */
+#define _PAGE_INVALID		0x400	/* HW invalid bit */
+#define _PAGE_INDEX_SHIFT	12
+#define _PAGE_OFFSET_MASK	0xffUL	/* page table offset mask */
+
+#endif /* __s390x__ */
+
 #ifdef __ia64__ /* ia64 */
 #define REGION_SHIFT		(61)
 
@@ -655,6 +709,16 @@ do { \
 /*
  * The function of dependence on machine
  */
+#ifdef __arm__
+int get_phys_base_arm(void);
+int get_machdep_info_arm(void);
+unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
+#define get_phys_base()		get_phys_base_arm()
+#define get_machdep_info()	get_machdep_info_arm()
+#define get_versiondep_info()	TRUE
+#define vaddr_to_paddr(X)	vaddr_to_paddr_arm(X)
+#endif /* arm */
+
 #ifdef __x86__
 int get_machdep_info_x86(void);
 int get_versiondep_info_x86(void);
@@ -685,6 +749,15 @@ unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
 #endif          /* powerpc */
 
+#ifdef __s390x__ /* s390x */
+int get_machdep_info_s390x(void);
+unsigned long long vaddr_to_paddr_s390x(unsigned long vaddr);
+#define get_phys_base()		TRUE
+#define get_machdep_info()	get_machdep_info_s390x()
+#define get_versiondep_info()	TRUE
+#define vaddr_to_paddr(X)	vaddr_to_paddr_s390x(X)
+#endif          /* s390x */
+
 #ifdef __ia64__ /* ia64 */
 int get_phys_base_ia64(void);
 int get_machdep_info_ia64(void);
@@ -695,6 +768,14 @@ unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ia64(X)
 #define VADDR_REGION(X)		(((unsigned long)(X)) >> REGION_SHIFT)
 #endif          /* ia64 */
+
+#ifndef ARCH_PFN_OFFSET
+#define ARCH_PFN_OFFSET		0
+#endif
+#define paddr_to_pfn(X) \
+	(((unsigned long long)(X) >> PAGESHIFT()) - ARCH_PFN_OFFSET)
+#define pfn_to_paddr(X) \
+	(((unsigned long long)(X) + ARCH_PFN_OFFSET) << PAGESHIFT())
 
 struct pt_load_segment {
 	off_t			file_offset;
@@ -793,6 +874,7 @@ struct DumpInfo {
 	unsigned long	vaddr_for_vtop;      /* virtual address for debugging */
 	long		page_size;           /* size of page */
 	long		page_shift;
+	int		nr_cpus;             /* number of cpu */
 	unsigned long long	max_mapnr;   /* number of page descriptor */
 	unsigned long   page_offset;
 	unsigned long   section_size_bits;
@@ -874,6 +956,12 @@ struct DumpInfo {
 	unsigned long		size_vmcoreinfo;
 	off_t			offset_vmcoreinfo_xen;
 	unsigned long		size_vmcoreinfo_xen;
+
+	/*
+	 * ELF NOTE section in dump memory image info:
+	 */
+	off_t			offset_note;
+	unsigned long		size_note;
 
 	/*
 	 * for Xen extraction
@@ -1142,6 +1230,11 @@ struct domain_list {
 #define PAGES_PER_MAPWORD 	(sizeof(unsigned long) * 8)
 #define MFNS_PER_FRAME		(info->page_size / sizeof(unsigned long))
 
+#ifdef __arm__
+#define kvtop_xen(X)	FALSE
+#define get_xen_info_arch(X) FALSE
+#endif	/* arm */
+
 #ifdef __x86__
 #define HYPERVISOR_VIRT_START_PAE	(0xF5800000UL)
 #define HYPERVISOR_VIRT_START		(0xFC000000UL)
@@ -1229,3 +1322,7 @@ int get_xen_info_ia64(void);
 #define get_xen_info_arch(X) FALSE
 #endif	/* powerpc */
 
+#ifdef __s390x__ /* s390x */
+#define kvtop_xen(X)	FALSE
+#define get_xen_info_arch(X) FALSE
+#endif	/* s390x */

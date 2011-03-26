@@ -56,7 +56,7 @@
     };
 
   - sub header
-    The sub header of the kdump compressed format is orignal. This header
+    The sub header of the kdump compressed format is original. This header
     has the member phys_base and dump_level. The member phys_base is for
     an x86_64 relocatable kernel, and the member dump_level has '-d' option's
     value of makedumpfile command.
@@ -64,6 +64,13 @@
     struct kdump_sub_header {
         unsigned long   phys_base;
         int             dump_level;     /* header_version 1 and later */
+	int		split;		/* header_version 2 and later */
+	unsigned long	start_pfn;	/* header_version 2 and later */
+	unsigned long	end_pfn;	/* header_version 2 and later */
+	off_t		offset_vmcoreinfo;/* header_version 3 and later */
+	unsigned long	size_vmcoreinfo;  /* header_version 3 and later */
+	off_t		offset_note;      /* header_version 4 and later */
+	unsigned long	size_note;        /* header_version 4 and later */
     };
 
   - 1st-bitmap

@@ -14,6 +14,7 @@
  * GNU General Public License for more details.
  */
 #include "makedumpfile.h"
+#include <sys/time.h>
 
 struct symbol_table	symbol_table;
 struct size_table	size_table;
@@ -39,12 +40,12 @@ void print_progress(const char 		*msg,
 /*
  * Message texts
  */
-#define PROGRESS_COPY   	"Copying data"
-#define PROGRESS_HOLES		"Checking for memory holes"
+#define PROGRESS_COPY   	"Copying data               "
+#define PROGRESS_HOLES		"Checking for memory holes  "
 #define PROGRESS_UNN_PAGES 	"Excluding unnecessary pages"
-#define PROGRESS_FREE_PAGES 	"Excluding free pages"
-#define PROGRESS_ZERO_PAGES 	"Excluding zero pages"
-#define PROGRESS_XEN_DOMAIN 	"Excluding xen user domain"
+#define PROGRESS_FREE_PAGES 	"Excluding free pages       "
+#define PROGRESS_ZERO_PAGES 	"Excluding zero pages       "
+#define PROGRESS_XEN_DOMAIN 	"Excluding xen user domain  "
 #define PROGRESS_MAXLEN		"35"
 
 /*
@@ -64,6 +65,25 @@ show_version(void)
 {
 	MSG("makedumpfile: version " VERSION " (released on " RELEASE_DATE ")\n");
 	MSG("\n");
+}
+
+void
+print_execution_time(char *step_name, struct timeval *tv_start)
+{
+	struct timeval tv_end;
+	time_t diff_sec;
+	suseconds_t diff_usec;
+
+	gettimeofday(&tv_end, NULL);
+
+	diff_sec  = tv_end.tv_sec - tv_start->tv_sec;
+	diff_usec = tv_end.tv_usec - tv_start->tv_usec;
+	if (diff_usec < 0) {
+		diff_sec--;
+		diff_usec += 1000000;
+	}
+	REPORT_MSG("STEP [%s] : %ld.%06ld seconds\n",
+		   step_name, diff_sec, diff_usec);
 }
 
 #define INITIALIZE_LONG_TABLE(table, value) \
@@ -477,8 +497,8 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 	}
 
 	if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the dump memory(%s). %s\n",
-		    info->name_memory, strerror(errno));
+		ERRMSG("Can't seek the dump memory(%s). (offset: %llx) %s\n",
+		    info->name_memory, offset, strerror(errno));
 		goto error;
 	}
 
@@ -622,8 +642,18 @@ print_usage(void)
 	MSG("  Rearranging the dump data in the flattened format to a readable DUMPFILE:\n");
 	MSG("  # makedumpfile -R DUMPFILE\n");
 	MSG("\n");
+	MSG("  Split the dump data to multiple DUMPFILEs in parallel:\n");
+	MSG("  # makedumpfile --split [OPTION] [-x VMLINUX|-i VMCOREINFO] VMCORE DUMPFILE1\n");
+	MSG("    DUMPFILE2 [DUMPFILE3 ..]\n");
+	MSG("\n");
+	MSG("  Reassemble multiple DUMPFILEs:\n");
+	MSG("  # makedumpfile --reassemble DUMPFILE1 DUMPFILE2 [DUMPFILE3 ..] DUMPFILE\n");
+	MSG("\n");
 	MSG("  Generating VMCOREINFO:\n");
 	MSG("  # makedumpfile -g VMCOREINFO -x VMLINUX\n");
+	MSG("\n");
+	MSG("  Extracting the dmesg log from a VMCORE:\n");
+	MSG("  # makedumpfile --dump-dmesg [-x VMLINUX|-i VMCOREINFO] VMCORE LOGFILE\n");
 	MSG("\n");
 	MSG("\n");
 	MSG("  Creating DUMPFILE of Xen:\n");
@@ -673,8 +703,9 @@ print_usage(void)
 	MSG("      Specify VMCOREINFO instead of VMLINUX for analyzing the first kernel's\n");
 	MSG("      memory usage.\n");
 	MSG("      VMCOREINFO should be made beforehand by makedumpfile with -g option,\n");
-	MSG("      and it contains the first kernel's information. If Dump_Level is 2 or\n");
-	MSG("      more and [-x VMLINUX] is not specified, this option is necessary.\n");
+	MSG("      and it contains the first kernel's information. This option is necessary\n");
+	MSG("      if VMCORE does not contain VMCOREINFO, [-x VMLINUX] is not specified,\n");
+	MSG("      and dump_level is 2 or more.\n");
 	MSG("\n");
 	MSG("  [-g VMCOREINFO]:\n");
 	MSG("      Generate VMCOREINFO from the first kernel's VMLINUX.\n");
@@ -693,6 +724,18 @@ print_usage(void)
 	MSG("  [-R]:\n");
 	MSG("      Rearrange the dump data in the flattened format from the standard input\n");
 	MSG("      to a readable DUMPFILE.\n");
+	MSG("\n");
+	MSG("  [--split]:\n");
+	MSG("      Split the dump data to multiple DUMPFILEs in parallel. If specifying\n");
+	MSG("      DUMPFILEs on different storage devices, a device can share I/O load with\n");
+	MSG("      other devices and it reduces time for saving the dump data. The file size\n");
+	MSG("      of each DUMPFILE is smaller than the system memory size which is divided\n");
+	MSG("      by the number of DUMPFILEs.\n");
+	MSG("      This feature supports only the kdump-compressed format.\n");
+	MSG("\n");
+	MSG("  [--reassemble]:\n");
+	MSG("      Reassemble multiple DUMPFILEs, which are created by --split option,\n");
+	MSG("      into one DUMPFILE. dumpfile1 and dumpfile2 are reassembled into dumpfile.\n");
 	MSG("\n");
 	MSG("  [--xen-syms XEN-SYMS]:\n");
 	MSG("      Specify the XEN-SYMS to analyze Xen's memory usage.\n");
@@ -735,6 +778,13 @@ print_usage(void)
 	MSG("      of virtual address. If specifing the VIRTUAL_ADDRESS, its physical\n");
 	MSG("      address is printed.\n");
 	MSG("\n");
+	MSG("  [--dump-dmesg]:\n");
+	MSG("      This option overrides the normal behavior of makedumpfile. Instead of\n");
+	MSG("      compressing and filtering a VMCORE to make it smaller, it simply\n");
+	MSG("      extracts the dmesg log from a VMCORE and writes it to the specified\n");
+	MSG("      LOGFILE. If a VMCORE does not contain VMCOREINFO for dmesg, it is\n");
+	MSG("      necessary to specfiy [-x VMLINUX] or [-i VMCOREINFO].\n");
+	MSG("\n");
 	MSG("  [-D]:\n");
 	MSG("      Print debugging message.\n");
 	MSG("\n");
@@ -743,6 +793,10 @@ print_usage(void)
 	MSG("\n");
 	MSG("  [-h]:\n");
 	MSG("      Show help message.\n");
+	MSG("\n");
+	MSG("  [-b <order>]\n");
+	MSG("      Specify the cache 2^order pages in ram when generating vmcore info\n");
+	MSG("      before writing to output\n");
 	MSG("\n");
 	MSG("  [-v]:\n");
 	MSG("      Show the version of makedumpfile.\n");
@@ -876,6 +930,11 @@ get_kdump_compressed_header_info(char *filename)
 		info->offset_vmcoreinfo = kh.offset_vmcoreinfo;
 		info->size_vmcoreinfo   = kh.size_vmcoreinfo;
 	}
+	if (dh.header_version >= 4) {
+		/* A dumpfile contains ELF note section. */
+		info->offset_note = kh.offset_note;
+		info->size_note   = kh.size_note;
+	}
 	return TRUE;
 error:
 	free(info->dh_memory);
@@ -933,14 +992,21 @@ int
 open_dump_bitmap(void)
 {
 	int i, fd;
+	char *tmpname;
 
-	if ((info->name_bitmap
-	    = (char *)malloc(sizeof(FILENAME_BITMAP))) == NULL) {
+	tmpname = getenv("TMPDIR");
+	if (!tmpname)
+		tmpname = "/tmp";
+
+	if ((info->name_bitmap = (char *)malloc(sizeof(FILENAME_BITMAP) +
+						strlen(tmpname) + 1)) == NULL) {
 		ERRMSG("Can't allocate memory for the filename. %s\n",
 		    strerror(errno));
 		return FALSE;
 	}
-	strcpy(info->name_bitmap, FILENAME_BITMAP);
+	strcpy(info->name_bitmap, tmpname);
+	strcat(info->name_bitmap, "/");
+	strcat(info->name_bitmap, FILENAME_BITMAP);
 	if ((fd = mkstemp(info->name_bitmap)) < 0) {
 		ERRMSG("Can't open the bitmap file(%s). %s\n",
 		    info->name_bitmap, strerror(errno));
@@ -1229,8 +1295,6 @@ int
 get_elf_info(void)
 {
 	int i, j, phnum, num_load, elf_format;
-	off_t offset_note;
-	unsigned long size_note;
 	Elf64_Phdr phdr;
 
 	/*
@@ -1259,15 +1323,15 @@ get_elf_info(void)
 		    strerror(errno));
 		return FALSE;
 	}
-	offset_note = 0;
-	size_note   = 0;
+	info->offset_note = 0;
+	info->size_note   = 0;
 	for (i = 0, j = 0; i < phnum; i++) {
 		if (!get_elf_phdr_memory(i, &phdr))
 			return FALSE;
 
 		if (phdr.p_type == PT_NOTE) {
-			offset_note = phdr.p_offset;
-			size_note   = phdr.p_filesz;
+			info->offset_note = phdr.p_offset;
+			info->size_note   = phdr.p_filesz;
 		}
 		if (phdr.p_type != PT_LOAD)
 			continue;
@@ -1285,11 +1349,11 @@ get_elf_info(void)
 			return FALSE;
 		j++;
 	}
-	if (offset_note == 0 || size_note == 0) {
+	if (info->offset_note == 0 || info->size_note == 0) {
 		ERRMSG("Can't find PT_NOTE Phdr.\n");
 		return FALSE;
 	}
-	if (!get_pt_note_info(offset_note, size_note)) {
+	if (!get_pt_note_info(info->offset_note, info->size_note)) {
 		ERRMSG("Can't get PT_NOTE information.\n");
 		return FALSE;
 	}
@@ -2862,6 +2926,12 @@ get_pt_note_info(off_t off_note, unsigned long sz_note)
 			return FALSE;
 		}
 		n_type = note_type(note);
+
+		if (n_type == NT_PRSTATUS) {
+			info->nr_cpus++;
+			offset += offset_next_note(note);
+			continue;
+		}
 		offset_desc = offset + offset_note_desc(note);
 		size_desc   = note_descsz(note);
 
@@ -3547,9 +3617,6 @@ nr_to_section(unsigned long nr, unsigned long *mem_sec)
 {
 	unsigned long addr;
 
-	if (!is_kvaddr(mem_sec[SECTION_NR_TO_ROOT(nr)]))
-		return NOT_KV_ADDR;
-
 	if (is_sparsemem_extreme())
 		addr = mem_sec[SECTION_NR_TO_ROOT(nr)] +
 		    (nr & SECTION_ROOT_MASK()) * SIZE(mem_section);
@@ -3772,6 +3839,8 @@ initialize_bitmap_memory(void)
 int
 initial(void)
 {
+	int debug_info = FALSE;
+
 	if (!(vt.mem_flags & MEMORY_XEN) && info->flag_exclude_xen_dom) {
 		MSG("'-X' option is disable,");
 		MSG("because %s is not Xen's memory core image.\n", info->name_memory);
@@ -3803,6 +3872,7 @@ initial(void)
 		if (!read_vmcoreinfo())
 			return FALSE;
 		close_vmcoreinfo();
+		debug_info = TRUE;
 	/*
 	 * Get the debug information for analysis from the kernel file
 	 */
@@ -3818,6 +3888,8 @@ initial(void)
 
 		if (!get_srcfile_info())
 			return FALSE;
+
+		debug_info = TRUE;
 	} else {
 		/*
 		 * Check whether /proc/vmcore contains vmcoreinfo,
@@ -3847,6 +3919,7 @@ initial(void)
 		if (!read_vmcoreinfo_from_vmcore(info->offset_vmcoreinfo,
 		    info->size_vmcoreinfo, FALSE))
 			return FALSE;
+		debug_info = TRUE;
 	}
 
 	if (!get_value_for_old_linux())
@@ -3863,31 +3936,25 @@ out:
 	if (!get_max_mapnr())
 		return FALSE;
 
-	if ((info->max_dump_level <= DL_EXCLUDE_ZERO) && !info->flag_dmesg) {
-		/*
-		 * The debugging information is unnecessary, because the memory
-		 * management system will not be analazed.
-		 */
+	if (debug_info) {
+		if (!get_machdep_info())
+			return FALSE;
+
+		if (!check_release())
+			return FALSE;
+
+		if (!get_versiondep_info())
+			return FALSE;
+
+		if (!get_numnodes())
+			return FALSE;
+
+		if (!get_mem_map())
+			return FALSE;
+	} else {
 		if (!get_mem_map_without_mm())
 			return FALSE;
-		else
-			return TRUE;
 	}
-
-	if (!get_machdep_info())
-		return FALSE;
-
-	if (!check_release())
-		return FALSE;
-
-	if (!get_versiondep_info())
-		return FALSE;
-
-	if (!get_numnodes())
-		return FALSE;
-
-	if (!get_mem_map())
-		return FALSE;
 
 	return TRUE;
 }
@@ -4379,7 +4446,8 @@ unsigned long long
 page_to_pfn(unsigned long page)
 {
 	unsigned int num;
-	unsigned long long pfn = 0, index = 0;
+	unsigned long long pfn = ULONGLONG_MAX;
+	unsigned long long index = 0;
 	struct mem_map_data *mmd;
 
 	mmd = info->mem_map_data;
@@ -4394,7 +4462,7 @@ page_to_pfn(unsigned long page)
 		pfn = mmd->pfn_start + index;
 		break;
 	}
-	if (!pfn) {
+	if (pfn == ULONGLONG_MAX) {
 		ERRMSG("Can't convert the address of page descriptor (%lx) to pfn.\n", page);
 		return ULONGLONG_MAX;
 	}
@@ -4504,8 +4572,15 @@ dump_dmesg()
 {
 	int log_buf_len, length_log, length_oldlog, ret = FALSE;
 	unsigned long log_buf, log_end, index;
+	unsigned long log_end_2_6_24;
+	unsigned      log_end_2_6_25;
 	char *log_buffer = NULL;
 
+	/*
+	 * log_end has been changed to "unsigned" since linux-2.6.25.
+	 *   2.6.24 or former: static unsigned long log_end;
+	 *   2.6.25 or later : static unsigned log_end;
+	 */
 	if (!open_files_for_creating_dumpfile())
 		return FALSE;
 
@@ -4526,9 +4601,20 @@ dump_dmesg()
 		ERRMSG("Can't get log_buf.\n");
 		return FALSE;
 	}
-	if (!readmem(VADDR, SYMBOL(log_end), &log_end, sizeof(log_end))) {
-		ERRMSG("Can't to get log_end.\n");
-		return FALSE;
+	if (info->kernel_version >= KERNEL_VERSION(2, 6, 25)) {
+		if (!readmem(VADDR, SYMBOL(log_end), &log_end_2_6_25,
+		    sizeof(log_end_2_6_25))) {
+			ERRMSG("Can't to get log_end.\n");
+			return FALSE;
+		}
+		log_end = log_end_2_6_25;
+	} else {
+		if (!readmem(VADDR, SYMBOL(log_end), &log_end_2_6_24,
+		    sizeof(log_end_2_6_24))) {
+			ERRMSG("Can't to get log_end.\n");
+			return FALSE;
+		}
+		log_end = log_end_2_6_24;
 	}
 	if (!readmem(VADDR, SYMBOL(log_buf_len), &log_buf_len,
 	    sizeof(log_buf_len))) {
@@ -4592,6 +4678,7 @@ _exclude_free_page(void)
 {
 	int i, nr_zones, num_nodes, node;
 	unsigned long node_zones, zone, spanned_pages, pgdat;
+	struct timeval tv_start;
 
 	if ((node = next_online_node(0)) < 0) {
 		ERRMSG("Can't get next online node.\n");
@@ -4601,6 +4688,8 @@ _exclude_free_page(void)
 		ERRMSG("Can't get pgdat list.\n");
 		return FALSE;
 	}
+	gettimeofday(&tv_start, NULL);
+
 	for (num_nodes = 1; num_nodes <= vt.numnodes; num_nodes++) {
 
 		print_progress(PROGRESS_FREE_PAGES, num_nodes - 1, vt.numnodes);
@@ -4645,6 +4734,7 @@ _exclude_free_page(void)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_FREE_PAGES, vt.numnodes, vt.numnodes);
+	print_execution_time(PROGRESS_FREE_PAGES, &tv_start);
 
 	return TRUE;
 }
@@ -4737,6 +4827,7 @@ create_1st_bitmap(void)
  	char buf[info->page_size];
 	unsigned long long pfn, pfn_start, pfn_end, pfn_bitmap1;
 	struct pt_load_segment *pls;
+	struct timeval tv_start;
 	off_t offset_page;
 
 	if (info->flag_refiltering)
@@ -4763,6 +4854,8 @@ create_1st_bitmap(void)
 		offset_page += info->page_size;
 	}
 
+	gettimeofday(&tv_start, NULL);
+
 	/*
 	 * If page is on memory hole, set bit on the 1st-bitmap.
 	 */
@@ -4787,6 +4880,7 @@ create_1st_bitmap(void)
 	 * print 100 %
 	 */
 	print_progress(PROGRESS_HOLES, info->max_mapnr, info->max_mapnr);
+	print_execution_time(PROGRESS_HOLES, &tv_start);
 
 	if (!sync_1st_bitmap())
 		return FALSE;
@@ -4802,11 +4896,14 @@ exclude_zero_pages(void)
 {
 	unsigned long long pfn, paddr;
 	struct dump_bitmap bitmap2;
+	struct timeval tv_start;
 	unsigned char buf[info->page_size];
 
 	initialize_2nd_bitmap(&bitmap2);
 
-	for (pfn = paddr = 0; pfn < info->max_mapnr;
+	gettimeofday(&tv_start, NULL);
+
+	for (pfn = 0, paddr = pfn_to_paddr(pfn); pfn < info->max_mapnr;
 	    pfn++, paddr += info->page_size) {
 
 		print_progress(PROGRESS_ZERO_PAGES, pfn, info->max_mapnr);
@@ -4840,6 +4937,7 @@ exclude_zero_pages(void)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_ZERO_PAGES, info->max_mapnr, info->max_mapnr);
+	print_execution_time(PROGRESS_ZERO_PAGES, &tv_start);
 
 	return TRUE;
 }
@@ -4937,6 +5035,9 @@ exclude_unnecessary_pages(void)
 {
 	unsigned int mm;
 	struct mem_map_data *mmd;
+	struct timeval tv_start;
+
+	gettimeofday(&tv_start, NULL);
 
 	for (mm = 0; mm < info->num_mem_map; mm++) {
 		print_progress(PROGRESS_UNN_PAGES, mm, info->num_mem_map);
@@ -4955,10 +5056,7 @@ exclude_unnecessary_pages(void)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_UNN_PAGES, info->num_mem_map, info->num_mem_map);
-
-	if (info->dump_level & DL_EXCLUDE_FREE)
-		if (!exclude_free_page())
-			return FALSE;
+	print_execution_time(PROGRESS_UNN_PAGES, &tv_start);
 
 	return TRUE;
 }
@@ -5012,14 +5110,23 @@ create_2nd_bitmap(void)
 	}
 
 	/*
-	 * Exclude unnecessary pages (free pages, cache pages, etc.)
+	 * Exclude cache pages, cache private pages, user data pages.
 	 */
-	if (DL_EXCLUDE_ZERO < info->dump_level) {
+	if (info->dump_level & DL_EXCLUDE_CACHE ||
+	    info->dump_level & DL_EXCLUDE_CACHE_PRI ||
+	    info->dump_level & DL_EXCLUDE_USER_DATA) {
 		if (!exclude_unnecessary_pages()) {
 			ERRMSG("Can't exclude unnecessary pages.\n");
 			return FALSE;
 		}
 	}
+
+	/*
+	 * Exclude free pages.
+	 */
+	if (info->dump_level & DL_EXCLUDE_FREE)
+		if (!exclude_free_page())
+			return FALSE;
 
 	/*
 	 * Exclude Xen user domain.
@@ -5454,13 +5561,13 @@ write_kdump_header(void)
 	/*
 	 * Write common header
 	 */
-	strcpy(dh->signature, KDUMP_SIGNATURE);
-	dh->header_version = 3;
+	strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
+	dh->header_version = 4;
   	dh->block_size     = info->page_size;
-	dh->sub_hdr_size   = sizeof(kh) + info->size_vmcoreinfo;
+	dh->sub_hdr_size   = sizeof(kh) + info->size_note;
 	dh->sub_hdr_size   = divideup(dh->sub_hdr_size, dh->block_size);
 	dh->max_mapnr      = info->max_mapnr;
-	dh->nr_cpus        = 1;
+	dh->nr_cpus        = info->nr_cpus;
 	dh->bitmap_blocks  = divideup(info->len_bitmap, dh->block_size);
 	memcpy(&dh->timestamp, &info->timestamp, sizeof(dh->timestamp));
 	memcpy(&dh->utsname, &info->system_utsname, sizeof(dh->utsname));
@@ -5481,35 +5588,47 @@ write_kdump_header(void)
 		kh.start_pfn = info->split_start_pfn;
 		kh.end_pfn   = info->split_end_pfn;
 	}
-	if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
+	if (info->offset_note && info->size_note) {
 		/*
-		 * Write vmcoreinfo data
+		 * Write ELF note section
 		 */
-		kh.offset_vmcoreinfo
+		kh.offset_note
 			= DISKDUMP_HEADER_BLOCKS * dh->block_size + sizeof(kh);
-		kh.size_vmcoreinfo = info->size_vmcoreinfo;
+		kh.size_note = info->size_note;
 
-		buf = malloc(info->size_vmcoreinfo);
+		buf = malloc(info->size_note);
 		if (buf == NULL) {
-			ERRMSG("Can't allocate memory for vmcoreinfo. %s\n",
+			ERRMSG("Can't allocate memory for ELF note section. %s\n",
 			    strerror(errno));
 			return FALSE;
 		}
-		if (lseek(info->fd_memory, info->offset_vmcoreinfo, SEEK_SET)
-		    < 0) {
+		if (lseek(info->fd_memory, info->offset_note, SEEK_SET) < 0) {
 			ERRMSG("Can't seek the dump memory(%s). %s\n",
 			    info->name_memory, strerror(errno));
 			goto out;
 		}
-		if (read(info->fd_memory, buf, info->size_vmcoreinfo)
-		    != info->size_vmcoreinfo) {
+		if (read(info->fd_memory, buf, info->size_note)
+		    != info->size_note) {
 			ERRMSG("Can't read the dump memory(%s). %s\n",
 			    info->name_memory, strerror(errno));
 			goto out;
 		}
-		if (!write_buffer(info->fd_dumpfile, kh.offset_vmcoreinfo, buf,
-		    kh.size_vmcoreinfo, info->name_dumpfile))
+		if (!write_buffer(info->fd_dumpfile, kh.offset_note, buf,
+		    kh.size_note, info->name_dumpfile))
 			goto out;
+
+		if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
+			/*
+			 * Set vmcoreinfo data
+			 *
+			 * NOTE: ELF note section contains vmcoreinfo data, and
+			 *       kh.offset_vmcoreinfo points the vmcoreinfo data.
+			 */
+			kh.offset_vmcoreinfo
+			    = info->offset_vmcoreinfo - info->offset_note
+			      + kh.offset_note;
+			kh.size_vmcoreinfo = info->size_vmcoreinfo;
+		}
 	}
 	if (!write_buffer(info->fd_dumpfile, dh->block_size, &kh,
 	    size, info->name_dumpfile))
@@ -5612,6 +5731,7 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	off_t off_seg_load, off_memory;
 	Elf64_Phdr load;
 	struct dump_bitmap bitmap2;
+	struct timeval tv_start;
 
 	if (!info->flag_elf_dumpfile)
 		return FALSE;
@@ -5626,6 +5746,8 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 
 	if (!(phnum = get_phnum_memory()))
 		return FALSE;
+
+	gettimeofday(&tv_start, NULL);
 
 	for (i = 0; i < phnum; i++) {
 		if (!get_elf_phdr_memory(i, &load))
@@ -5769,6 +5891,7 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
 
 	return TRUE;
@@ -5854,6 +5977,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	unsigned char buf[info->page_size], *buf_out = NULL;
 	unsigned long len_buf_out;
 	struct dump_bitmap bitmap2;
+	struct timeval tv_start;
 	const off_t failed = (off_t)-1;
 
 	int ret = FALSE;
@@ -5895,6 +6019,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	/*
 	 * Write the data of zero-filled page.
 	 */
+	gettimeofday(&tv_start, NULL);
 	if (info->dump_level & DL_EXCLUDE_ZERO) {
 		pd_zero.size = info->page_size;
 		pd_zero.flags = 0;
@@ -5913,6 +6038,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 		start_pfn = 0;
 		end_pfn   = info->max_mapnr;
 	}
+
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
 
 		if ((num_dumped % per) == 0)
@@ -5983,6 +6109,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
 
 	ret = TRUE;
@@ -6584,6 +6711,9 @@ exclude_xen_user_domain(void)
 	unsigned long long pfn, pfn_end;
 	unsigned long long j, size;
 	struct pt_load_segment *pls;
+	struct timeval tv_start;
+
+	gettimeofday(&tv_start, NULL);
 
 	/*
 	 * NOTE: the first half of bitmap is not used for Xen extraction
@@ -6639,6 +6769,7 @@ exclude_xen_user_domain(void)
 	 * print [100 %]
 	 */
 	print_progress(PROGRESS_XEN_DOMAIN, info->num_load_memory, info->num_load_memory);
+	print_execution_time(PROGRESS_XEN_DOMAIN, &tv_start);
 
 	return TRUE;
 }
@@ -6763,6 +6894,7 @@ print_report(void)
 	shrinking = (pfn_original - pfn_excluded) * 100;
 	shrinking = shrinking / pfn_original;
 
+	REPORT_MSG("\n");
 	REPORT_MSG("Original pages  : 0x%016llx\n", pfn_original);
 	REPORT_MSG("  Excluded pages   : 0x%016llx\n", pfn_excluded);
 	REPORT_MSG("    Pages filled with zero  : 0x%016llx\n", pfn_zero);
@@ -7341,6 +7473,7 @@ reassemble_kdump_pages(void)
 	struct disk_dump_header dh;
 	struct page_desc pd, pd_zero;
 	struct cache_data cd_pd, cd_data;
+	struct timeval tv_start;
 	char *data = NULL;
 
 	initialize_2nd_bitmap(&bitmap2);
@@ -7374,6 +7507,7 @@ reassemble_kdump_pages(void)
 	/*
 	 * Write page header of zero-filled page.
 	 */
+	gettimeofday(&tv_start, NULL);
 	if (info->dump_level & DL_EXCLUDE_ZERO) {
 		/*
 		 * makedumpfile outputs the data of zero-filled page at first
@@ -7391,6 +7525,7 @@ reassemble_kdump_pages(void)
 			goto out;
 		offset_data_new  += pd_zero.size;
 	}
+
 	for (i = 0; i < info->num_dumpfile; i++) {
 		if ((fd = open(SPLITTING_DUMPFILE(i), O_RDONLY)) < 0) {
 			ERRMSG("Can't open a file(%s). %s\n",
@@ -7459,6 +7594,8 @@ reassemble_kdump_pages(void)
 		goto out;
 
 	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_execution_time(PROGRESS_COPY, &tv_start);
+
 	ret = TRUE;
 out:
 	free_cache_data(&cd_pd);
