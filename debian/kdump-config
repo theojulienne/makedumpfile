@@ -191,6 +191,10 @@ function locate_debug_kernel()
 		fi
 
 	# 2: Look for an installed debug kernel
+	elif [ -e /usr/lib/debug/boot/vmlinux-$KVER ] ; then
+		DEBUG_KERNEL=/usr/lib/debug/boot/vmlinux-$KVER
+		DEBUG_CONFIG=/boot/config-$KVER
+		DEBUG_MAP=/boot/System.map-$KVER
 	elif [ -e /usr/lib/debug/vmlinux-$KVER ] ; then
 		DEBUG_KERNEL=/usr/lib/debug/vmlinux-$KVER
 		DEBUG_CONFIG=/usr/lib/debug/config-$KVER
