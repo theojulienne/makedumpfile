@@ -1,2 +1,4 @@
 0001-Use-install-instead-of-cp-in-Makefile.patch
 0002-Build-both-static-and-dynamic-binaries.patch
+0003-PATCH-BUGFIX-Avoid-SIGSEGV-when-specifying-V-option.patch
+0004-PATCH-Copy-correct-nr_cpus-info-to-dumpfile-during-r.patch

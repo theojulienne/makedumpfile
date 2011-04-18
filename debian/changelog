@@ -1,3 +1,13 @@
+makedumpfile (1.3.7-2) UNRELEASED; urgency=low
+
+  * Cherry-pick upstream commits:
+    - [PATCH] BUGFIX: Avoid SIGSEGV when specifying -V option.
+      (5b8c2da75cbdb230019a3b956793fb768055b977)
+    - [PATCH] Copy correct nr_cpus info to dumpfile during re-filtering.
+      (c4f1c98a9827c1c0e41772c1954940fbf1b48048)
+
+ -- John Wright <jsw@debian.org>  Mon, 18 Apr 2011 02:41:14 -0700
+
 makedumpfile (1.3.7-1) unstable; urgency=low
 
   [ John Wright ]

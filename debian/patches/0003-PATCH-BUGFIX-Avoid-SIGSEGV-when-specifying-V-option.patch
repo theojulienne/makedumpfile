@@ -1,0 +1,29 @@
+From: Ken'ichi Ohmichi <oomichi@mxs.nes.nec.co.jp>
+Date: Thu, 24 Feb 2011 08:21:10 +0900
+Subject: [PATCH] BUGFIX: Avoid SIGSEGV when specifying -V option.
+
+-V option is not public, and it is used internally for --vtop option.
+A bug is that the second argument in getopt_long() includes 'V'.
+This patch fixes it.
+
+Reported-by: HATAYAMA Daisuke <d.hatayama@jp.fujitsu.com>
+Signed-off-by: Ken'ichi Ohmichi <oomichi@mxs.nes.nec.co.jp>
+(cherry picked from commit 5b8c2da75cbdb230019a3b956793fb768055b977)
+---
+ makedumpfile.c |    2 +-
+ 1 files changed, 1 insertions(+), 1 deletions(-)
+
+diff --git a/makedumpfile.c b/makedumpfile.c
+index 442626e..a0fad6a 100644
+--- a/makedumpfile.c
++++ b/makedumpfile.c
+@@ -7844,7 +7844,7 @@ main(int argc, char *argv[])
+ 
+ 	info->block_order = DEFAULT_ORDER;
+ 	message_level = DEFAULT_MSG_LEVEL;
+-	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:MRrsVvXx:", longopts,
++	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:MRrsvXx:", longopts,
+ 	    NULL)) != -1) {
+ 		switch (opt) {
+ 		case 'b':
+-- 
