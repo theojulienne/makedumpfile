@@ -1,8 +1,12 @@
-Build both static and dynamic binaries
+From: John Wright <jsw@debian.org>
+Date: Mon, 18 Apr 2011 02:23:53 -0700
+Subject: Build both static and dynamic binaries
 
 Signed-off-by: John Wright <jsw@debian.org>
-Index: makedumpfile/Makefile
-===================================================================
+---
+ Makefile |    9 +++++++--
+ 1 files changed, 7 insertions(+), 2 deletions(-)
+
 diff --git a/Makefile b/Makefile
 index 4b4fef2..546de2f 100644
 --- a/Makefile
@@ -38,3 +42,4 @@ index 4b4fef2..546de2f 100644
  	install -D -m755 ./makedumpfile-R.pl ${DESTDIR}/usr/bin/makedumpfile-R.pl
  	install -D -m755 ./makedumpfile.8 ${DESTDIR}/usr/share/man/man8/makedumpfile.8
  
+-- 
