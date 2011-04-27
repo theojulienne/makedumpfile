@@ -1,4 +1,4 @@
-makedumpfile (1.3.7-2) UNRELEASED; urgency=low
+makedumpfile (1.3.7-2) unstable; urgency=low
 
   * Cherry-pick upstream commits:
     - [PATCH] BUGFIX: Avoid SIGSEGV when specifying -V option.
@@ -11,7 +11,7 @@ makedumpfile (1.3.7-2) UNRELEASED; urgency=low
     installation of a new version of the package will not leave it
     unconfigured.  (Closes: #623470)
 
- -- John Wright <jsw@debian.org>  Mon, 18 Apr 2011 02:41:14 -0700
+ -- John Wright <jsw@debian.org>  Tue, 26 Apr 2011 20:05:16 -0700
 
 makedumpfile (1.3.7-1) unstable; urgency=low
 
