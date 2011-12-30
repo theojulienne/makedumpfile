@@ -13,6 +13,8 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  */
+#ifndef _MAKEDUMPFILE_H
+#define _MAKEDUMPFILE_H
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,11 +28,11 @@
 #include <sys/utsname.h>
 #include <sys/wait.h>
 #include <zlib.h>
-#include <elfutils/libdw.h>
 #include <libelf.h>
-#include <dwarf.h>
 #include <byteswap.h>
 #include <getopt.h>
+#include "common.h"
+#include "dwarf_info.h"
 #include "diskdump_mod.h"
 
 /*
@@ -75,7 +77,6 @@ enum {
 #define MEMORY_PAGETABLE_4L	(1 << 0)
 #define MEMORY_PAGETABLE_3L	(1 << 1)
 #define MEMORY_X86_PAE		(1 << 2)
-#define MEMORY_XEN		(1 << 3)
 
 /*
  * Type of address
@@ -133,13 +134,6 @@ isAnon(unsigned long mapping)
 #define NR_MEM_SECTIONS()	(1UL << SECTIONS_SHIFT())
 
 /*
- * Incorrect address
- */
-#define NOT_MEMMAP_ADDR	(0x0)
-#define NOT_KV_ADDR	(0x0)
-#define NOT_PADDR	(ULONGLONG_MAX)
-
-/*
  * Dump Level
  */
 #define MIN_DUMP_LEVEL		(0)
@@ -154,66 +148,6 @@ isAnon(unsigned long mapping)
 #define DL_EXCLUDE_USER_DATA	(0x008) /* Exclude UserProcessData Pages */
 #define DL_EXCLUDE_FREE		(0x010)	/* Exclude Free Pages */
 
-/*
- * Message Level
- */
-#define MIN_MSG_LEVEL		(0)
-#define MAX_MSG_LEVEL		(31)
-#define DEFAULT_MSG_LEVEL	(7)	/* Print the progress indicator, the
-					   common message, the error message */
-#define ML_PRINT_PROGRESS	(0x001) /* Print the progress indicator */
-#define ML_PRINT_COMMON_MSG	(0x002)	/* Print the common message */
-#define ML_PRINT_ERROR_MSG	(0x004)	/* Print the error message */
-#define ML_PRINT_DEBUG_MSG	(0x008) /* Print the debugging message */
-#define ML_PRINT_REPORT_MSG	(0x010) /* Print the report message */
-extern int message_level;
-
-#define MSG(x...) \
-do { \
-	if (message_level & ML_PRINT_COMMON_MSG) { \
-		if (info->flag_flatten) \
-			fprintf(stderr, x); \
-		else \
-			fprintf(stdout, x); \
-	} \
-} while (0)
-
-#define ERRMSG(x...) \
-do { \
-	if (message_level & ML_PRINT_ERROR_MSG) { \
-		fprintf(stderr, __FUNCTION__); \
-		fprintf(stderr, ": "); \
-		fprintf(stderr, x); \
-	} \
-} while (0)
-
-#define PROGRESS_MSG(x...) \
-do { \
-	if (message_level & ML_PRINT_PROGRESS) { \
-		fprintf(stderr, x); \
-	} \
-} while (0)
-
-#define DEBUG_MSG(x...) \
-do { \
-	if (message_level & ML_PRINT_DEBUG_MSG) { \
-		if (info->flag_flatten) \
-			fprintf(stderr, x); \
-		else \
-			fprintf(stdout, x); \
-	} \
-} while (0)
-
-#define REPORT_MSG(x...) \
-do { \
-	if (message_level & ML_PRINT_REPORT_MSG) { \
-		if (info->flag_flatten) \
-			fprintf(stderr, x); \
-		else \
-			fprintf(stdout, x); \
-	} \
-} while (0)
-
 
 /*
  * For parse_line()
@@ -225,6 +159,7 @@ do { \
 #define BITPERBYTE		(8)
 #define PGMM_CACHED		(512)
 #define PFN_EXCLUDED		(256)
+#define BUFSIZE			(1024)
 #define BUFSIZE_FGETS		(1500)
 #define BUFSIZE_BITMAP		(4096)
 #define PFN_BUFBITMAP		(BITPERBYTE*BUFSIZE_BITMAP)
@@ -249,7 +184,6 @@ do { \
 /*
  * for symbol
  */
-#define NOT_FOUND_SYMBOL	(0)
 #define INVALID_SYMBOL_DATA	(ULONG_MAX)
 #define SYMBOL(X)		(symbol_table.X)
 #define SYMBOL_INIT(symbol, str_symbol) \
@@ -279,12 +213,6 @@ do { \
 /*
  * for structure
  */
-#define NOT_FOUND_LONG_VALUE	(-1)
-#define NOT_FOUND_STRUCTURE	(NOT_FOUND_LONG_VALUE)
-#define FAILED_DWARFINFO	(-2)
-#define INVALID_STRUCTURE_DATA	(-3)
-#define FOUND_ARRAY_TYPE	(LONG_MAX - 1)
-
 #define SIZE(X)			(size_table.X)
 #define OFFSET(X)		(offset_table.X)
 #define ARRAY_LENGTH(X)		(array_table.X)
@@ -375,7 +303,6 @@ do { \
 /*
  * for number
  */
-#define NOT_FOUND_NUMBER	(NOT_FOUND_LONG_VALUE)
 #define NUMBER(X)		(number_table.X)
 
 #define ENUM_NUMBER_INIT(number, str_number)	\
@@ -432,6 +359,8 @@ do { \
 #define SPLITTING_FD_BITMAP(i)	info->splitting_info[i].fd_bitmap
 #define SPLITTING_START_PFN(i)	info->splitting_info[i].start_pfn
 #define SPLITTING_END_PFN(i)	info->splitting_info[i].end_pfn
+#define SPLITTING_OFFSET_EI(i)	info->splitting_info[i].offset_eraseinfo
+#define SPLITTING_SIZE_EI(i)	info->splitting_info[i].size_eraseinfo
 
 /*
  * kernel version
@@ -453,11 +382,7 @@ do { \
  * vmcoreinfo in /proc/vmcore
  */
 #define VMCOREINFO_BYTES		(4096)
-#define VMCOREINFO_NOTE_NAME		"VMCOREINFO"
-#define VMCOREINFO_NOTE_NAME_BYTES	(sizeof(VMCOREINFO_NOTE_NAME))
 #define FILENAME_VMCOREINFO		"/tmp/vmcoreinfoXXXXXX"
-#define VMCOREINFO_XEN_NOTE_NAME	"VMCOREINFO_XEN"
-#define VMCOREINFO_XEN_NOTE_NAME_BYTES	(sizeof(VMCOREINFO_XEN_NOTE_NAME))
 
 /*
  * field name of vmcoreinfo file
@@ -478,23 +403,12 @@ do { \
 /*
  * common value
  */
-#define TRUE		(1)
-#define FALSE		(0)
-#define ERROR		(-1)
 #define NOSPACE		(-1)    /* code of write-error due to nospace */
-#define MAX(a,b)	((a) > (b) ? (a) : (b))
-#define MIN(a,b)	((a) < (b) ? (a) : (b))
-#define LONG_MAX	((long)(~0UL>>1))
-#define ULONG_MAX	(~0UL)
-#define ULONGLONG_MAX	(~0ULL)
 #define DEFAULT_ORDER	(4)
 #define TIMEOUT_STDIN	(600)
 #define SIZE_BUF_STDIN	(4096)
-#define ELF32		(1)
-#define ELF64		(2)
 #define STRLEN_OSRELEASE (65)	/* same length as diskdump.h */
 
-#define XEN_ELFNOTE_CRASH_INFO	(0x1000001)
 #define SIZE_XEN_CRASH_INFO_V2	(sizeof(unsigned long) * 10)
 
 /*
@@ -615,7 +529,7 @@ do { \
 #ifdef __s390x__
 #define __PAGE_OFFSET		(info->page_size - 1)
 #define KERNELBASE		(0)
-#define KVBASE			(SYMBOL(_stext))
+#define KVBASE			KERNELBASE
 #define _SECTION_SIZE_BITS	(28)
 #define _MAX_PHYSMEM_BITS	(42)
 
@@ -777,14 +691,6 @@ unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define pfn_to_paddr(X) \
 	(((unsigned long long)(X) + ARCH_PFN_OFFSET) << PAGESHIFT())
 
-struct pt_load_segment {
-	off_t			file_offset;
-	unsigned long long	phys_start;
-	unsigned long long	phys_end;
-	unsigned long long	virt_start;
-	unsigned long long	virt_end;
-};
-
 struct mem_map_data {
 	unsigned long long	pfn_start;
 	unsigned long long	pfn_end;
@@ -839,6 +745,8 @@ struct splitting_info {
 	int 			fd_bitmap;
 	unsigned long long	start_pfn;
 	unsigned long long	end_pfn;
+	off_t			offset_eraseinfo;
+	unsigned long		size_eraseinfo;
 } splitting_info_t;
 
 struct DumpInfo {
@@ -854,7 +762,6 @@ struct DumpInfo {
 	int		num_dump_level;      /* number of dump level */
 	int		array_dump_level[NUM_ARRAY_DUMP_LEVEL];
 	int		flag_compress;       /* flag of compression */
-	int		flag_elf64_memory;   /* flag of ELF64 memory */
 	int		flag_elf_dumpfile;   /* flag of creating ELF dumpfile */
 	int		flag_generate_vmcoreinfo;/* flag of generating vmcoreinfo file */
 	int		flag_read_vmcoreinfo;    /* flag of reading vmcoreinfo file */
@@ -874,7 +781,6 @@ struct DumpInfo {
 	unsigned long	vaddr_for_vtop;      /* virtual address for debugging */
 	long		page_size;           /* size of page */
 	long		page_shift;
-	int		nr_cpus;             /* number of cpu */
 	unsigned long long	max_mapnr;   /* number of page descriptor */
 	unsigned long   page_offset;
 	unsigned long   section_size_bits;
@@ -888,6 +794,13 @@ struct DumpInfo {
 	unsigned long	vmemmap_end;
 
 	/*
+	 * Filter config file containing filter commands to filter out kernel
+	 * data from vmcore.
+	 */
+	char		*name_filterconfig;
+	FILE		*file_filterconfig;
+
+	/*
 	 * diskdimp info:
 	 */
 	int		block_order;
@@ -896,15 +809,13 @@ struct DumpInfo {
 	struct dump_bitmap 		*bitmap1;
 	struct dump_bitmap 		*bitmap2;
 	struct disk_dump_header		*dump_header;
+	struct kdump_sub_header		sub_header;
 
 	/*
 	 * ELF header info:
 	 */
-	unsigned int		num_load_memory;
 	unsigned int		num_load_dumpfile;
-	size_t			offset_load_memory;
 	size_t			offset_load_dumpfile;
-	struct pt_load_segment	*pt_load_segments;
 
 	/*
 	 * mem_map info:
@@ -950,24 +861,18 @@ struct DumpInfo {
 	char			release[STRLEN_OSRELEASE];
 
 	/*
-	 * vmcoreinfo in dump memory image info:
-	 */
-	off_t			offset_vmcoreinfo;
-	unsigned long		size_vmcoreinfo;
-	off_t			offset_vmcoreinfo_xen;
-	unsigned long		size_vmcoreinfo_xen;
-
-	/*
 	 * ELF NOTE section in dump memory image info:
 	 */
-	off_t			offset_note;
-	unsigned long		size_note;
+	off_t			offset_note_dumpfile;
+
+	/*
+	 * erased information in dump memory image info:
+	 */
+	unsigned long           size_elf_eraseinfo;
 
 	/*
 	 * for Xen extraction
 	 */
-	off_t			offset_xen_crash_info;
-	unsigned long		size_xen_crash_info;
 	unsigned long long	dom0_mapnr;  /* The number of page in domain-0.
 					      * Different from max_mapnr.
 					      * max_mapnr is the number of page
@@ -980,7 +885,6 @@ struct DumpInfo {
 	unsigned long alloc_bitmap;
 	unsigned long dom0;
 	unsigned long p2m_frames;
-	unsigned long p2m_mfn;
 	unsigned long *p2m_mfn_frame_list;
 	int	num_domain;
 	struct domain_list *domain_list;
@@ -1003,6 +907,26 @@ struct vm_table {
 	unsigned int	mem_flags;
 };
 extern struct vm_table		vt;
+
+/*
+ * Loaded module symbols info.
+ */
+#define MOD_NAME_LEN	64
+#define IN_RANGE(addr, mbase, sz) \
+	(((unsigned long)(addr) >= (unsigned long)mbase) \
+	&& ((unsigned long)addr < (unsigned long)(mbase + sz)))
+
+struct symbol_info {
+	char			*name;
+	unsigned long long	value;
+};
+
+struct module_info {
+	char			name[MOD_NAME_LEN];
+	unsigned int		num_syms;
+	struct symbol_info	*sym_info;
+};
+
 
 struct symbol_table {
 	unsigned long long	mem_map;
@@ -1044,6 +968,12 @@ struct symbol_table {
 	unsigned long long	frametable_pg_dir;
 	unsigned long long	max_page;
 	unsigned long long	alloc_bitmap;
+
+	/*
+	 * for loading module symbol data
+	 */
+
+	unsigned long long	modules;
 };
 
 struct size_table {
@@ -1061,6 +991,11 @@ struct size_table {
 	 */
 	long	page_info;
 	long	domain;
+
+	/*
+	 * for loading module symbol data
+	 */
+	long	module;
 };
 
 struct offset_table {
@@ -1115,6 +1050,20 @@ struct offset_table {
 		long	next_in_list;
 	} domain;
 
+	/*
+	 * for loading module symbol data
+	 */
+	struct module {
+		long	list;
+		long	name;
+		long	module_core;
+		long	core_size;
+		long	module_init;
+		long	init_size;
+		long	num_symtab;
+		long	symtab;
+		long	strtab;
+	} module;
 };
 
 /*
@@ -1152,7 +1101,6 @@ struct number_table {
 	long	PG_swapcache;
 };
 
-#define LEN_SRCFILE				(100)
 struct srcfile_table {
 	/*
 	 * typedef
@@ -1167,47 +1115,9 @@ extern struct array_table	array_table;
 extern struct number_table	number_table;
 extern struct srcfile_table	srcfile_table;
 
-/*
- * Debugging information
- */
-enum {
-	DWARF_INFO_GET_STRUCT_SIZE,
-	DWARF_INFO_GET_MEMBER_OFFSET,
-	DWARF_INFO_GET_MEMBER_OFFSET_IN_UNION,
-	DWARF_INFO_GET_MEMBER_OFFSET_1ST_UNION,
-	DWARF_INFO_GET_MEMBER_ARRAY_LENGTH,
-	DWARF_INFO_GET_SYMBOL_ARRAY_LENGTH,
-	DWARF_INFO_GET_TYPEDEF_SIZE,
-	DWARF_INFO_GET_TYPEDEF_SRCNAME,
-	DWARF_INFO_GET_ENUM_NUMBER,
-	DWARF_INFO_CHECK_SYMBOL_ARRAY_TYPE
-};
-
-struct dwarf_info {
-	unsigned int	cmd;		/* IN */
-	int	fd_debuginfo;		/* IN */
-	char	*name_debuginfo;	/* IN */
-	char	*struct_name;		/* IN */
-	char	*symbol_name;		/* IN */
-	char	*member_name;		/* IN */
-	char	*enum_name;		/* IN */
-	long	struct_size;		/* OUT */
-	long	member_offset;		/* OUT */
-	long	array_length;		/* OUT */
-	long	enum_number;		/* OUT */
-	char	src_name[LEN_SRCFILE];	/* OUT */
-};
-
-extern struct dwarf_info	dwarf_info;
 
 int readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size);
-off_t paddr_to_offset(unsigned long long paddr);
-unsigned long long vaddr_to_paddr_general(unsigned long long vaddr);
-int check_elf_format(int fd, char *filename, int *phnum, int *num_load);
-int get_elf64_phdr(int fd, char *filename, int num, Elf64_Phdr *phdr);
-int get_elf32_phdr(int fd, char *filename, int num, Elf32_Phdr *phdr);
 int get_str_osrelease_from_vmlinux(void);
-int get_pt_note_info(off_t off_note, unsigned long sz_note);
 int read_vmcoreinfo_xen(void);
 int exclude_xen_user_domain(void);
 unsigned long long get_num_dumpable(void);
@@ -1326,3 +1236,5 @@ int get_xen_info_ia64(void);
 #define kvtop_xen(X)	FALSE
 #define get_xen_info_arch(X) FALSE
 #endif	/* s390x */
+
+#endif /* MAKEDUMPFILE_H */

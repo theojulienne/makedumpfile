@@ -13,12 +13,10 @@
  * along with this program; if not, write to the Free Software
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
+#ifndef _DISKDUMP_MOD_H
+#define _DISKDUMP_MOD_H
 
 #include <elf.h>
-
-#define divideup(x, y)	(((x) + ((y) - 1)) / (y))
-#define round(x, y)	(((x) / (y)) * (y))
-#define roundup(x, y)	((((x) + ((y) - 1)) / (y)) * (y))
 
 #define DUMP_PARTITION_SIGNATURE	"diskdump"
 #define DISK_DUMP_SIGNATURE		"DISKDUMP"
@@ -75,6 +73,8 @@ struct kdump_sub_header {
 	unsigned long	size_vmcoreinfo;  /* header_version 3 and later */
 	off_t		offset_note;      /* header_version 4 and later */
 	unsigned long	size_note;        /* header_version 4 and later */
+	off_t		offset_eraseinfo; /* header_version 5 and later */
+	unsigned long	size_eraseinfo;   /* header_version 5 and later */
 };
 
 /* page flags */
@@ -91,4 +91,6 @@ typedef struct page_desc {
 #define DISKDUMP_CACHED_PAGES	(16)
 #define PAGE_VALID		(0x1)	/* flags */
 #define DISKDUMP_VALID_PAGE(flags)	((flags) & PAGE_VALID)
+
+#endif  /* DISKDUMP_MOD_H */
 

@@ -15,7 +15,9 @@
  */
 #ifdef __x86__
 
-#include "makedumpfile.h"
+#include "../print_info.h"
+#include "../elf_info.h"
+#include "../makedumpfile.h"
 
 int
 get_machdep_info_x86(void)

@@ -20,7 +20,9 @@
 
 #ifdef __s390x__
 
-#include "makedumpfile.h"
+#include "../print_info.h"
+#include "../elf_info.h"
+#include "../makedumpfile.h"
 
 #define TABLE_SIZE		4096
 
@@ -61,6 +63,11 @@ int
 get_machdep_info_s390x(void)
 {
 	unsigned long vmlist, vmalloc_start;
+	char *term_str = getenv("TERM");
+
+	if (term_str && strcmp(term_str, "dumb") == 0)
+		/* '\r' control character is ignored on "dumb" terminal. */
+		flag_ignore_r_char = 1;
 
 	info->section_size_bits = _SECTION_SIZE_BITS;
 	info->max_physmem_bits  = _MAX_PHYSMEM_BITS;
@@ -269,9 +276,7 @@ vaddr_to_paddr_s390x(unsigned long vaddr)
 		paddr = vtop_s390x(vaddr);
 	}
 	else {
-		ERRMSG("Can't convert a virtual address(%lx) to " \
-		    "physical address.\n", vaddr);
-		return NOT_PADDR;
+		paddr = vaddr - KVBASE;
 	}
 
 	return paddr;

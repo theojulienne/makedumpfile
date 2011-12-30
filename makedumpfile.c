@@ -14,6 +14,10 @@
  * GNU General Public License for more details.
  */
 #include "makedumpfile.h"
+#include "print_info.h"
+#include "dwarf_info.h"
+#include "elf_info.h"
+#include "erase_info.h"
 #include <sys/time.h>
 
 struct symbol_table	symbol_table;
@@ -23,30 +27,10 @@ struct array_table	array_table;
 struct number_table	number_table;
 struct srcfile_table	srcfile_table;
 
-struct dwarf_info	dwarf_info;
 struct vm_table		vt = { 0 };
 struct DumpInfo		*info = NULL;
 
 char filename_stdout[] = FILENAME_STDOUT;
-int message_level;
-
-/*
- * Forward declarations
- */
-void print_progress(const char 		*msg,
-		    unsigned long 	current,
-		    unsigned long 	end);
-
-/*
- * Message texts
- */
-#define PROGRESS_COPY   	"Copying data               "
-#define PROGRESS_HOLES		"Checking for memory holes  "
-#define PROGRESS_UNN_PAGES 	"Excluding unnecessary pages"
-#define PROGRESS_FREE_PAGES 	"Excluding free pages       "
-#define PROGRESS_ZERO_PAGES 	"Excluding zero pages       "
-#define PROGRESS_XEN_DOMAIN 	"Excluding xen user domain  "
-#define PROGRESS_MAXLEN		"35"
 
 /*
  * The numbers of the excluded pages
@@ -59,32 +43,6 @@ unsigned long long pfn_user;
 unsigned long long pfn_free;
 
 int retcd = FAILED;	/* return code */
-
-void
-show_version(void)
-{
-	MSG("makedumpfile: version " VERSION " (released on " RELEASE_DATE ")\n");
-	MSG("\n");
-}
-
-void
-print_execution_time(char *step_name, struct timeval *tv_start)
-{
-	struct timeval tv_end;
-	time_t diff_sec;
-	suseconds_t diff_usec;
-
-	gettimeofday(&tv_end, NULL);
-
-	diff_sec  = tv_end.tv_sec - tv_start->tv_sec;
-	diff_usec = tv_end.tv_usec - tv_start->tv_usec;
-	if (diff_usec < 0) {
-		diff_sec--;
-		diff_usec += 1000000;
-	}
-	REPORT_MSG("STEP [%s] : %ld.%06ld seconds\n",
-		   step_name, diff_sec, diff_usec);
-}
 
 #define INITIALIZE_LONG_TABLE(table, value) \
 do { \
@@ -117,109 +75,6 @@ initialize_tables(void)
 	INITIALIZE_LONG_TABLE(offset_table, NOT_FOUND_STRUCTURE);
 	INITIALIZE_LONG_TABLE(array_table, NOT_FOUND_STRUCTURE);
 	INITIALIZE_LONG_TABLE(number_table, NOT_FOUND_NUMBER);
-}
-
-/*
- * Convert Physical Address to File Offset.
- *  If this function returns 0x0, File Offset isn't found.
- *  The File Offset 0x0 is in the ELF header.
- *  It is not in the memory image.
- */
-off_t
-paddr_to_offset(unsigned long long paddr)
-{
-	int i;
-	off_t offset;
-	struct pt_load_segment *pls;
-
-	for (i = offset = 0; i < info->num_load_memory; i++) {
-		pls = &info->pt_load_segments[i];
-		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)) {
-			offset = (off_t)(paddr - pls->phys_start) +
-				pls->file_offset;
-				break;
-		}
-	}
-	return offset;
-}
-
-unsigned long long
-vaddr_to_paddr_general(unsigned long long vaddr)
-{
-	int i;
-	unsigned long long paddr = NOT_PADDR;
-	struct pt_load_segment *pls;
-
-	if (info->flag_refiltering)
-		return NOT_PADDR;
-
-	for (i = 0; i < info->num_load_memory; i++) {
-		pls = &info->pt_load_segments[i];
-		if ((vaddr >= pls->virt_start)
-		    && (vaddr < pls->virt_end)) {
-			paddr = (off_t)(vaddr - pls->virt_start) +
-				pls->phys_start;
-				break;
-		}
-	}
-	return paddr;
-}
-
-/*
- * This function is slow because it doesn't use the memory.
- * It is useful at few calls like get_str_osrelease_from_vmlinux().
- */
-off_t
-vaddr_to_offset_slow(int fd, char *filename, unsigned long long vaddr)
-{
-	off_t offset = 0;
-	int i, phnum, num_load, flag_elf64, elf_format;
-	Elf64_Phdr load64;
-	Elf32_Phdr load32;
-
-	elf_format = check_elf_format(fd, filename, &phnum, &num_load);
-
-	if (elf_format == ELF64)
-		flag_elf64 = TRUE;
-	else if (elf_format == ELF32)
-		flag_elf64 = FALSE;
-	else
-		return 0;
-
-	for (i = 0; i < phnum; i++) {
-		if (flag_elf64) { /* ELF64 */
-			if (!get_elf64_phdr(fd, filename, i, &load64)) {
-				ERRMSG("Can't find Phdr %d.\n", i);
-				return 0;
-			}
-			if (load64.p_type != PT_LOAD)
-				continue;
-
-			if ((vaddr < load64.p_vaddr)
-			    || (load64.p_vaddr + load64.p_filesz <= vaddr))
-				continue;
-
-			offset = load64.p_offset + (vaddr - load64.p_vaddr);
-			break;
-		} else {         /* ELF32 */
-			if (!get_elf32_phdr(fd, filename, i, &load32)) {
-				ERRMSG("Can't find Phdr %d.\n", i);
-				return 0;
-			}
-			if (load32.p_type != PT_LOAD)
-				continue;
-
-			if ((vaddr < load32.p_vaddr)
-			    || (load32.p_vaddr + load32.p_filesz <= vaddr))
-				continue;
-
-			offset = load32.p_offset + (vaddr - load32.p_vaddr);
-			break;
-		}
-	}
-
-	return offset;
 }
 
 /*
@@ -257,20 +112,13 @@ ptom_xen(unsigned long long paddr)
 int
 get_max_mapnr(void)
 {
-	int i;
 	unsigned long long max_paddr;
-	struct pt_load_segment *pls;
 
 	if (info->flag_refiltering) {
 		info->max_mapnr = info->dh_memory->max_mapnr;
 		return TRUE;
 	}
-
-	for (i = 0, max_paddr = 0; i < info->num_load_memory; i++) {
-		pls = &info->pt_load_segments[i];
-		if (max_paddr < pls->phys_end)
-			max_paddr = pls->phys_end;
-	}
+	max_paddr = get_max_paddr();
 	info->max_mapnr = paddr_to_pfn(max_paddr);
 
 	DEBUG_MSG("\n");
@@ -436,7 +284,7 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 			    addr);
 			goto error;
 		}
-		if (vt.mem_flags & MEMORY_XEN) {
+		if (is_xen_memory()) {
 			if ((maddr = ptom_xen(paddr)) == NOT_PADDR) {
 				ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
 				    paddr);
@@ -447,7 +295,7 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 		break;
 	case PADDR:
 		paddr = addr;
-		if (vt.mem_flags & MEMORY_XEN) {
+		if (is_xen_memory()) {
 			if ((maddr  = ptom_xen(paddr)) == NOT_PADDR) {
 				ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
 				    paddr);
@@ -498,7 +346,7 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 
 	if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
 		ERRMSG("Can't seek the dump memory(%s). (offset: %llx) %s\n",
-		    info->name_memory, offset, strerror(errno));
+		    info->name_memory, (unsigned long long)offset, strerror(errno));
 		goto error;
 	}
 
@@ -628,198 +476,6 @@ check_release(void)
 	return TRUE;
 }
 
-void
-print_usage(void)
-{
-	MSG("\n");
-	MSG("Usage:\n");
-	MSG("  Creating DUMPFILE:\n");
-	MSG("  # makedumpfile    [-c|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE DUMPFILE\n");
-	MSG("\n");
-	MSG("  Outputting the dump data in the flattened format to the standard output:\n");
-	MSG("  # makedumpfile -F [-c|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE\n");
-	MSG("\n");
-	MSG("  Rearranging the dump data in the flattened format to a readable DUMPFILE:\n");
-	MSG("  # makedumpfile -R DUMPFILE\n");
-	MSG("\n");
-	MSG("  Split the dump data to multiple DUMPFILEs in parallel:\n");
-	MSG("  # makedumpfile --split [OPTION] [-x VMLINUX|-i VMCOREINFO] VMCORE DUMPFILE1\n");
-	MSG("    DUMPFILE2 [DUMPFILE3 ..]\n");
-	MSG("\n");
-	MSG("  Reassemble multiple DUMPFILEs:\n");
-	MSG("  # makedumpfile --reassemble DUMPFILE1 DUMPFILE2 [DUMPFILE3 ..] DUMPFILE\n");
-	MSG("\n");
-	MSG("  Generating VMCOREINFO:\n");
-	MSG("  # makedumpfile -g VMCOREINFO -x VMLINUX\n");
-	MSG("\n");
-	MSG("  Extracting the dmesg log from a VMCORE:\n");
-	MSG("  # makedumpfile --dump-dmesg [-x VMLINUX|-i VMCOREINFO] VMCORE LOGFILE\n");
-	MSG("\n");
-	MSG("\n");
-	MSG("  Creating DUMPFILE of Xen:\n");
-	MSG("  # makedumpfile -E [--xen-syms XEN-SYMS|--xen-vmcoreinfo VMCOREINFO] VMCORE DUMPFILE\n");
-	MSG("\n");
-	MSG("  Generating VMCOREINFO of Xen:\n");
-	MSG("  # makedumpfile -g VMCOREINFO --xen-syms XEN-SYMS\n");
-	MSG("\n");
-	MSG("\n");
-	MSG("Available options:\n");
-	MSG("  [-c]:\n");
-	MSG("      Compress dump data by each page.\n");
-	MSG("      A user cannot specify this option with -E option, because the ELF format\n");
-	MSG("      does not support compressed data.\n");
-	MSG("      THIS IS ONLY FOR THE CRASH UTILITY.\n");
-	MSG("\n");
-	MSG("  [-d DL]:\n");
-	MSG("      Specify the type of unnecessary page for analysis.\n");
-	MSG("      Pages of the specified type are not copied to DUMPFILE. The page type\n");
-	MSG("      marked in the following table is excluded. A user can specify multiple\n");
-	MSG("      page types by setting the sum of each page type for Dump_Level (DL).\n");
-	MSG("      The maximum of Dump_Level is 31.\n");
-	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1.\n");
-	MSG("\n");
-	MSG("      Dump  |  zero   cache   cache    user    free\n");
-	MSG("      Level |  page   page    private  data    page\n");
-	MSG("     -------+---------------------------------------\n");
-	MSG("         0  |\n");
-	MSG("         1  |  X\n");
-	MSG("         2  |         X\n");
-	MSG("         4  |         X       X\n");
-	MSG("         8  |                          X\n");
-	MSG("        16  |                                  X\n");
-	MSG("        31  |  X      X       X        X       X\n");
-	MSG("\n");
-	MSG("  [-E]:\n");
-	MSG("      Create DUMPFILE in the ELF format.\n");
-	MSG("      This option cannot be specified with -c option, because the ELF\n");
-	MSG("      format does not support compressed data.\n");
-	MSG("\n");
-	MSG("  [-x VMLINUX]:\n");
-	MSG("      Specify the first kernel's VMLINUX to analyze the first kernel's\n");
-	MSG("      memory usage.\n");
-	MSG("      The page size of the first kernel and the second kernel should match.\n");
-	MSG("\n");
-	MSG("  [-i VMCOREINFO]:\n");
-	MSG("      Specify VMCOREINFO instead of VMLINUX for analyzing the first kernel's\n");
-	MSG("      memory usage.\n");
-	MSG("      VMCOREINFO should be made beforehand by makedumpfile with -g option,\n");
-	MSG("      and it contains the first kernel's information. This option is necessary\n");
-	MSG("      if VMCORE does not contain VMCOREINFO, [-x VMLINUX] is not specified,\n");
-	MSG("      and dump_level is 2 or more.\n");
-	MSG("\n");
-	MSG("  [-g VMCOREINFO]:\n");
-	MSG("      Generate VMCOREINFO from the first kernel's VMLINUX.\n");
-	MSG("      VMCOREINFO must be generated on the system that is running the first\n");
-	MSG("      kernel. With -i option, a user can specify VMCOREINFO generated on the\n");
-	MSG("      other system that is running the same first kernel. [-x VMLINUX] must\n");
-	MSG("      be specified.\n");
-	MSG("\n");
-	MSG("  [-F]:\n");
-	MSG("      Output the dump data in the flattened format to the standard output\n");
-	MSG("      for transporting the dump data by SSH.\n");
-	MSG("      Analysis tools cannot read the flattened format directly. For analysis,\n");
-	MSG("      the dump data in the flattened format should be rearranged to a readable\n");
-	MSG("      DUMPFILE by -R option.\n");
-	MSG("\n");
-	MSG("  [-R]:\n");
-	MSG("      Rearrange the dump data in the flattened format from the standard input\n");
-	MSG("      to a readable DUMPFILE.\n");
-	MSG("\n");
-	MSG("  [--split]:\n");
-	MSG("      Split the dump data to multiple DUMPFILEs in parallel. If specifying\n");
-	MSG("      DUMPFILEs on different storage devices, a device can share I/O load with\n");
-	MSG("      other devices and it reduces time for saving the dump data. The file size\n");
-	MSG("      of each DUMPFILE is smaller than the system memory size which is divided\n");
-	MSG("      by the number of DUMPFILEs.\n");
-	MSG("      This feature supports only the kdump-compressed format.\n");
-	MSG("\n");
-	MSG("  [--reassemble]:\n");
-	MSG("      Reassemble multiple DUMPFILEs, which are created by --split option,\n");
-	MSG("      into one DUMPFILE. dumpfile1 and dumpfile2 are reassembled into dumpfile.\n");
-	MSG("\n");
-	MSG("  [--xen-syms XEN-SYMS]:\n");
-	MSG("      Specify the XEN-SYMS to analyze Xen's memory usage.\n");
-	MSG("\n");
-	MSG("  [--xen-vmcoreinfo VMCOREINFO]:\n");
-	MSG("      Specify the VMCOREINFO of Xen to analyze Xen's memory usage.\n");
-	MSG("\n");
-	MSG("  [--xen_phys_start XEN_PHYS_START_ADDRESS]:\n");
-	MSG("      This option is only for x86_64.\n");
-	MSG("      Specify the XEN_PHYS_START_ADDRESS, if the xen code/data is relocatable\n");
-	MSG("      and VMCORE does not contain XEN_PHYS_START_ADDRESS in the CRASHINFO.\n");
-	MSG("\n");
-	MSG("  [-X]:\n");
-	MSG("      Exclude all the user domain pages from Xen kdump's VMCORE, and extract\n");
-	MSG("      the part of Xen and domain-0.\n");
-	MSG("\n");
-	MSG("  [--message-level ML]:\n");
-	MSG("      Specify the message types.\n");
-	MSG("      Users can restrict output printed by specifying Message_Level (ML) with\n");
-	MSG("      this option. The message type marked with an X in the following table is\n");
-	MSG("      printed. For example, according to the table, specifying 7 as ML means\n");
-	MSG("      progress indicator, common message, and error message are printed, and\n");
-	MSG("      this is a default value.\n");
-	MSG("      Note that the maximum value of message_level is 31.\n");
-	MSG("\n");
-	MSG("      Message | progress    common    error     debug     report\n");
-	MSG("      Level   | indicator   message   message   message   message\n");
-	MSG("     ---------+------------------------------------------------------\n");
-	MSG("            0 |\n");
-	MSG("            1 |     X\n");
-	MSG("            2 |                X\n");
-	MSG("            4 |                          X\n");
-	MSG("          * 7 |     X          X         X\n");
-	MSG("            8 |                                    X\n");
-	MSG("           16 |                                              X\n");
-	MSG("           31 |     X          X         X         X         X\n");
-	MSG("\n");
-	MSG("  [--vtop VIRTUAL_ADDRESS]:\n");
-	MSG("      This option is useful, when user debugs the translation problem\n");
-	MSG("      of virtual address. If specifing the VIRTUAL_ADDRESS, its physical\n");
-	MSG("      address is printed.\n");
-	MSG("\n");
-	MSG("  [--dump-dmesg]:\n");
-	MSG("      This option overrides the normal behavior of makedumpfile. Instead of\n");
-	MSG("      compressing and filtering a VMCORE to make it smaller, it simply\n");
-	MSG("      extracts the dmesg log from a VMCORE and writes it to the specified\n");
-	MSG("      LOGFILE. If a VMCORE does not contain VMCOREINFO for dmesg, it is\n");
-	MSG("      necessary to specfiy [-x VMLINUX] or [-i VMCOREINFO].\n");
-	MSG("\n");
-	MSG("  [-D]:\n");
-	MSG("      Print debugging message.\n");
-	MSG("\n");
-	MSG("  [-f]:\n");
-	MSG("      Overwrite DUMPFILE even if it already exists.\n");
-	MSG("\n");
-	MSG("  [-h]:\n");
-	MSG("      Show help message.\n");
-	MSG("\n");
-	MSG("  [-b <order>]\n");
-	MSG("      Specify the cache 2^order pages in ram when generating vmcore info\n");
-	MSG("      before writing to output\n");
-	MSG("\n");
-	MSG("  [-v]:\n");
-	MSG("      Show the version of makedumpfile.\n");
-	MSG("\n");
-	MSG("  VMLINUX:\n");
-	MSG("      This is a pathname to the first kernel's vmlinux.\n");
-	MSG("      This file must have the debug information of the first kernel to analyze\n");
-	MSG("      the first kernel's memory usage.\n");
-	MSG("\n");
-	MSG("  VMCORE:\n");
-	MSG("      This is a pathname to the first kernel's memory core image.\n");
-	MSG("      This argument is generally /proc/vmcore.\n");
-	MSG("\n");
-	MSG("  DUMPFILE:\n");
-	MSG("      This is a pathname to a file created by this command.\n");
-	MSG("\n");
-	MSG("  XEN-SYMS:\n");
-	MSG("      This is a pathname to the xen-syms.\n");
-	MSG("      This file must have the debug information of Xen to analyze\n");
-	MSG("      Xen's memory usage.\n");
-	MSG("\n");
-}
-
 int
 open_vmcoreinfo(char *mode)
 {
@@ -924,16 +580,28 @@ get_kdump_compressed_header_info(char *filename)
 		goto error;
 	}
 	memcpy(info->kh_memory, &kh, sizeof(kh));
+	set_nr_cpus(dh.nr_cpus);
 
 	if (dh.header_version >= 3) {
 		/* A dumpfile contains vmcoreinfo data. */
-		info->offset_vmcoreinfo = kh.offset_vmcoreinfo;
-		info->size_vmcoreinfo   = kh.size_vmcoreinfo;
+		set_vmcoreinfo(kh.offset_vmcoreinfo, kh.size_vmcoreinfo);
+		DEBUG_MSG("  offset_vmcoreinfo: 0x%llx\n",
+				(unsigned long long)kh.offset_vmcoreinfo);
+		DEBUG_MSG("  size_vmcoreinfo  : 0x%ld\n", kh.size_vmcoreinfo);
 	}
 	if (dh.header_version >= 4) {
 		/* A dumpfile contains ELF note section. */
-		info->offset_note = kh.offset_note;
-		info->size_note   = kh.size_note;
+		set_pt_note(kh.offset_note, kh.size_note);
+		DEBUG_MSG("  offset_note      : 0x%llx\n",
+				(unsigned long long)kh.offset_note);
+		DEBUG_MSG("  size_note        : 0x%ld\n", kh.size_note);
+	}
+	if (dh.header_version >= 5) {
+		/* A dumpfile contains erased information. */
+		set_eraseinfo(kh.offset_eraseinfo, kh.size_eraseinfo);
+		DEBUG_MSG("  offset_eraseinfo : 0x%llx\n",
+				(unsigned long long)kh.offset_eraseinfo);
+		DEBUG_MSG("  size_eraseinfo   : 0x%ld\n", kh.size_eraseinfo);
 	}
 	return TRUE;
 error:
@@ -1095,1091 +763,9 @@ open_files_for_creating_dumpfile(void)
 }
 
 int
-dump_Elf_load(Elf64_Phdr *prog, int num_load)
-{
-	struct pt_load_segment *pls;
-
-	if (prog->p_type != PT_LOAD) {
-		ERRMSG("%s isn't the dump memory.\n", info->name_memory);
-		return FALSE;
-	}
-
-	pls = &info->pt_load_segments[num_load];
-	pls->phys_start  = prog->p_paddr;
-	pls->phys_end    = pls->phys_start + prog->p_filesz;
-	pls->virt_start  = prog->p_vaddr;
-	pls->virt_end    = pls->virt_start + prog->p_filesz;
-	pls->file_offset = prog->p_offset;
-
-	DEBUG_MSG("LOAD (%d)\n", num_load);
-	DEBUG_MSG("  phys_start : %llx\n", pls->phys_start);
-	DEBUG_MSG("  phys_end   : %llx\n", pls->phys_end);
-	DEBUG_MSG("  virt_start : %llx\n", pls->virt_start);
-	DEBUG_MSG("  virt_end   : %llx\n", pls->virt_end);
-
-	return TRUE;
-}
-
-int
-get_elf64_ehdr(Elf64_Ehdr *ehdr)
-{
-	const off_t failed = (off_t)-1;
-
-	if (lseek(info->fd_memory, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the dump memory(%s). %s\n",
-		    info->name_memory, strerror(errno));
-		return FALSE;
-	}
-	if (read(info->fd_memory, ehdr, sizeof(Elf64_Ehdr))
-	    != sizeof(Elf64_Ehdr)) {
-		ERRMSG("Can't read the dump memory(%s). %s\n",
-		    info->name_memory, strerror(errno));
-		return FALSE;
-	}
-	if (ehdr->e_ident[EI_CLASS] != ELFCLASS64) {
-		ERRMSG("Can't get valid e_ident.\n");
-		return FALSE;
-	}
-	return TRUE;
-}
-
-int
-get_elf64_phdr(int fd, char *filename, int index, Elf64_Phdr *phdr)
-{
-	off_t offset;
-	const off_t failed = (off_t)-1;
-
-	offset = sizeof(Elf64_Ehdr) + sizeof(Elf64_Phdr) * index;
-
-	if (lseek(fd, offset, SEEK_SET) == failed) {
-		ERRMSG("Can't seek %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	if (read(fd, phdr, sizeof(Elf64_Phdr)) != sizeof(Elf64_Phdr)) {
-		ERRMSG("Can't read %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	return TRUE;
-}
-
-int
-get_elf32_ehdr(Elf32_Ehdr *ehdr)
-{
-	const off_t failed = (off_t)-1;
-
-	if (lseek(info->fd_memory, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the dump memory(%s). %s\n",
-		    info->name_memory, strerror(errno));
-		return FALSE;
-	}
-	if (read(info->fd_memory, ehdr, sizeof(Elf32_Ehdr))
-	    != sizeof(Elf32_Ehdr)) {
-		ERRMSG("Can't read the dump memory(%s). %s\n",
-		    info->name_memory, strerror(errno));
-		return FALSE;
-	}
-	if (ehdr->e_ident[EI_CLASS] != ELFCLASS32) {
-		ERRMSG("Can't get valid e_ident.\n");
-		return FALSE;
-	}
-	return TRUE;
-}
-
-int
-get_elf32_phdr(int fd, char *filename, int index, Elf32_Phdr *phdr)
-{
-	off_t offset;
-	const off_t failed = (off_t)-1;
-
-	offset = sizeof(Elf32_Ehdr) + sizeof(Elf32_Phdr) * index;
-
-	if (lseek(fd, offset, SEEK_SET) == failed) {
-		ERRMSG("Can't seek %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	if (read(fd, phdr, sizeof(Elf32_Phdr)) != sizeof(Elf32_Phdr)) {
-		ERRMSG("Can't read %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	return TRUE;
-}
-
-int
-get_elf_phdr_memory(int index, Elf64_Phdr *phdr)
-{
-	Elf32_Phdr phdr32;
-
-	if (info->flag_elf64_memory) { /* ELF64 */
-		if (!get_elf64_phdr(info->fd_memory, info->name_memory,
-		    index, phdr)) {
-			ERRMSG("Can't find Phdr %d.\n", index);
-			return FALSE;
-		}
-	} else {
-		if (!get_elf32_phdr(info->fd_memory, info->name_memory,
-		    index, &phdr32)) {
-			ERRMSG("Can't find Phdr %d.\n", index);
-			return FALSE;
-		}
-		memset(phdr, 0, sizeof(Elf64_Phdr));
-		phdr->p_type   = phdr32.p_type;
-		phdr->p_flags  = phdr32.p_flags;
-		phdr->p_offset = phdr32.p_offset;
-		phdr->p_vaddr  = phdr32.p_vaddr;
-		phdr->p_paddr  = phdr32.p_paddr;
-		phdr->p_filesz = phdr32.p_filesz;
-		phdr->p_memsz  = phdr32.p_memsz;
-		phdr->p_align  = phdr32.p_align;
-	}
-	return TRUE;
-}
-
-int
-check_elf_format(int fd, char *filename, int *phnum, int *num_load)
-{
-	int i;
-	Elf64_Ehdr ehdr64;
-	Elf64_Phdr load64;
-	Elf32_Ehdr ehdr32;
-	Elf32_Phdr load32;
-	const off_t failed = (off_t)-1;
-
-	if (lseek(fd, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	if (read(fd, &ehdr64, sizeof(Elf64_Ehdr)) != sizeof(Elf64_Ehdr)) {
-		ERRMSG("Can't read %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	if (lseek(fd, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	if (read(fd, &ehdr32, sizeof(Elf32_Ehdr)) != sizeof(Elf32_Ehdr)) {
-		ERRMSG("Can't read %s. %s\n", filename, strerror(errno));
-		return FALSE;
-	}
-	(*num_load) = 0;
-	if ((ehdr64.e_ident[EI_CLASS] == ELFCLASS64)
-	    && (ehdr32.e_ident[EI_CLASS] != ELFCLASS32)) {
-		(*phnum) = ehdr64.e_phnum;
-		for (i = 0; i < ehdr64.e_phnum; i++) {
-			if (!get_elf64_phdr(fd, filename, i, &load64)) {
-				ERRMSG("Can't find Phdr %d.\n", i);
-				return FALSE;
-			}
-			if (load64.p_type == PT_LOAD)
-				(*num_load)++;
-		}
-		return ELF64;
-
-	} else if ((ehdr64.e_ident[EI_CLASS] != ELFCLASS64)
-	    && (ehdr32.e_ident[EI_CLASS] == ELFCLASS32)) {
-		(*phnum) = ehdr32.e_phnum;
-		for (i = 0; i < ehdr32.e_phnum; i++) {
-			if (!get_elf32_phdr(fd, filename, i, &load32)) {
-				ERRMSG("Can't find Phdr %d.\n", i);
-				return FALSE;
-			}
-			if (load32.p_type == PT_LOAD)
-				(*num_load)++;
-		}
-		return ELF32;
-	}
-	ERRMSG("Can't get valid ehdr.\n");
-	return FALSE;
-}
-
-int
-get_elf_info(void)
-{
-	int i, j, phnum, num_load, elf_format;
-	Elf64_Phdr phdr;
-
-	/*
-	 * Check ELF64 or ELF32.
-	 */
-	elf_format = check_elf_format(info->fd_memory, info->name_memory,
-	    &phnum, &num_load);
-
-	if (elf_format == ELF64)
-		info->flag_elf64_memory = TRUE;
-	else if (elf_format == ELF32)
-		info->flag_elf64_memory = FALSE;
-	else
-		return FALSE;
-
-	info->num_load_memory = num_load;
-
-	if (!info->num_load_memory) {
-		ERRMSG("Can't get the number of PT_LOAD.\n");
-		return FALSE;
-	}
-	if ((info->pt_load_segments = (struct pt_load_segment *)
-	    calloc(1, sizeof(struct pt_load_segment) *
-	    info->num_load_memory)) == NULL) {
-		ERRMSG("Can't allocate memory for the PT_LOAD. %s\n",
-		    strerror(errno));
-		return FALSE;
-	}
-	info->offset_note = 0;
-	info->size_note   = 0;
-	for (i = 0, j = 0; i < phnum; i++) {
-		if (!get_elf_phdr_memory(i, &phdr))
-			return FALSE;
-
-		if (phdr.p_type == PT_NOTE) {
-			info->offset_note = phdr.p_offset;
-			info->size_note   = phdr.p_filesz;
-		}
-		if (phdr.p_type != PT_LOAD)
-			continue;
-
-		if (j == 0) {
-			info->offset_load_memory = phdr.p_offset;
-			if (!info->offset_load_memory) {
-				ERRMSG("Can't get the offset of page data.\n");
-				return FALSE;
-			}
-		}
-		if (j >= info->num_load_memory)
-			return FALSE;
-		if(!dump_Elf_load(&phdr, j))
-			return FALSE;
-		j++;
-	}
-	if (info->offset_note == 0 || info->size_note == 0) {
-		ERRMSG("Can't find PT_NOTE Phdr.\n");
-		return FALSE;
-	}
-	if (!get_pt_note_info(info->offset_note, info->size_note)) {
-		ERRMSG("Can't get PT_NOTE information.\n");
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
-unsigned long long
-get_symbol_addr(char *symname)
-{
-	int i;
-	unsigned long long symbol = NOT_FOUND_SYMBOL;
-	Elf *elfd = NULL;
-	GElf_Shdr shdr;
-	GElf_Sym sym;
-	Elf_Data *data = NULL;
-	Elf_Scn *scn = NULL;
-	char *sym_name = NULL;
-	const off_t failed = (off_t)-1;
-
-	if (lseek(dwarf_info.fd_debuginfo, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the kernel file(%s). %s\n",
-		    dwarf_info.name_debuginfo, strerror(errno));
-		return NOT_FOUND_SYMBOL;
-	}
-	if (!(elfd = elf_begin(dwarf_info.fd_debuginfo, ELF_C_READ, NULL))) {
-		ERRMSG("Can't get first elf header of %s.\n",
-		    dwarf_info.name_debuginfo);
-		return NOT_FOUND_SYMBOL;
-	}
-	while ((scn = elf_nextscn(elfd, scn)) != NULL) {
-		if (gelf_getshdr(scn, &shdr) == NULL) {
-			ERRMSG("Can't get section header.\n");
-			goto out;
-		}
-		if (shdr.sh_type == SHT_SYMTAB)
-			break;
-	}
-	if (!scn) {
-		ERRMSG("Can't find symbol table.\n");
-		goto out;
-	}
-
-	data = elf_getdata(scn, data);
-
-	if ((!data) || (data->d_size == 0)) {
-		ERRMSG("No data in symbol table.\n");
-		goto out;
-	}
-
-	for (i = 0; i < (shdr.sh_size/shdr.sh_entsize); i++) {
-		if (gelf_getsym(data, i, &sym) == NULL) {
-			ERRMSG("Can't get symbol at index %d.\n", i);
-			goto out;
-		}
-		sym_name = elf_strptr(elfd, shdr.sh_link, sym.st_name);
-
-		if (sym_name == NULL)
-			continue;
-
-		if (!strcmp(sym_name, symname)) {
-			symbol = sym.st_value;
-			break;
-		}
-	}
-out:
-	if (elfd != NULL)
-		elf_end(elfd);
-
-	return symbol;
-}
-
-unsigned long
-get_next_symbol_addr(char *symname)
-{
-	int i;
-	unsigned long symbol = NOT_FOUND_SYMBOL;
-	unsigned long next_symbol = NOT_FOUND_SYMBOL;
-	Elf *elfd = NULL;
-	GElf_Shdr shdr;
-	GElf_Sym sym;
-	Elf_Data *data = NULL;
-	Elf_Scn *scn = NULL;
-	char *sym_name = NULL;
-	const off_t failed = (off_t)-1;
-
-	if (lseek(dwarf_info.fd_debuginfo, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the kernel file(%s). %s\n",
-		    dwarf_info.name_debuginfo, strerror(errno));
-		return NOT_FOUND_SYMBOL;
-	}
-	if (!(elfd = elf_begin(dwarf_info.fd_debuginfo, ELF_C_READ, NULL))) {
-		ERRMSG("Can't get first elf header of %s.\n",
-		    dwarf_info.name_debuginfo);
-		return NOT_FOUND_SYMBOL;
-	}
-	while ((scn = elf_nextscn(elfd, scn)) != NULL) {
-		if (gelf_getshdr(scn, &shdr) == NULL) {
-			ERRMSG("Can't get section header.\n");
-			goto out;
-		}
-		if (shdr.sh_type == SHT_SYMTAB)
-			break;
-	}
-	if (!scn) {
-		ERRMSG("Can't find symbol table.\n");
-		goto out;
-	}
-
-	data = elf_getdata(scn, data);
-
-	if ((!data) || (data->d_size == 0)) {
-		ERRMSG("No data in symbol table.\n");
-		goto out;
-	}
-
-	for (i = 0; i < (shdr.sh_size/shdr.sh_entsize); i++) {
-		if (gelf_getsym(data, i, &sym) == NULL) {
-			ERRMSG("Can't get symbol at index %d.\n", i);
-			goto out;
-		}
-		sym_name = elf_strptr(elfd, shdr.sh_link, sym.st_name);
-
-		if (sym_name == NULL)
-			continue;
-
-		if (!strcmp(sym_name, symname)) {
-			symbol = sym.st_value;
-			break;
-		}
-	}
-
-	if (symbol == NOT_FOUND_SYMBOL)
-		goto out;
-
-	/*
-	 * Search for next symbol.
-	 */
-	for (i = 0; i < (shdr.sh_size/shdr.sh_entsize); i++) {
-		if (gelf_getsym(data, i, &sym) == NULL) {
-			ERRMSG("Can't get symbol at index %d.\n", i);
-			goto out;
-		}
-		sym_name = elf_strptr(elfd, shdr.sh_link, sym.st_name);
-
-		if (sym_name == NULL)
-			continue;
-
-		if (symbol < sym.st_value) {
-			if (next_symbol == NOT_FOUND_SYMBOL)
-				next_symbol = sym.st_value;
-
-			else if (sym.st_value < next_symbol)
-				next_symbol = sym.st_value;
-		}
-	}
-out:
-	if (elfd != NULL)
-		elf_end(elfd);
-
-	return next_symbol;
-}
-
-int
 is_kvaddr(unsigned long long addr)
 {
 	return (addr >= (unsigned long long)(KVBASE));
-}
-
-static int
-get_data_member_location(Dwarf_Die *die, long *offset)
-{
-	size_t expcnt;
-	Dwarf_Attribute attr;
-	Dwarf_Op *expr;
-
-	if (dwarf_attr(die, DW_AT_data_member_location, &attr) == NULL)
-		return FALSE;
-
-	if (dwarf_getlocation(&attr, &expr, &expcnt) < 0)
-		return FALSE;
-
-	(*offset) = expr[0].number;
-
-	return TRUE;
-}
-
-static int
-get_die_type(Dwarf *dwarfd, Dwarf_Die *die, Dwarf_Die *die_type)
-{
-	Dwarf_Attribute attr;
-	Dwarf_Off offset_type, offset_cu;
-
-	offset_cu = dwarf_dieoffset(die) - dwarf_cuoffset(die);
-
-	/*
-	 * Get the offset of DW_AT_type.
-	 */
-	if (dwarf_attr(die, DW_AT_type, &attr) == NULL)
-		return FALSE;
-
-	if (dwarf_formref(&attr, &offset_type) < 0)
-		return FALSE;
-
-	if (dwarf_offdie(dwarfd, offset_type + offset_cu, die_type) == NULL) {
-		ERRMSG("Can't get CU die.\n");
-		return FALSE;
-	}
-	return TRUE;
-}
-
-static int
-get_data_array_length(Dwarf *dwarfd, Dwarf_Die *die)
-{
-	int tag;
-	Dwarf_Attribute attr;
-	Dwarf_Die die_type;
-	Dwarf_Word upper_bound;
-
-	if (!get_die_type(dwarfd, die, &die_type)) {
-		ERRMSG("Can't get CU die of DW_AT_type.\n");
-		return FALSE;
-	}
-	tag = dwarf_tag(&die_type);
-	if (tag != DW_TAG_array_type) {
-		/*
-		 * This kernel doesn't have the member of array.
-		 */
-		return TRUE;
-	}
-
-	/*
-	 * Get the demanded array length.
-	 */
-	dwarf_child(&die_type, &die_type);
-	do {
-		tag  = dwarf_tag(&die_type);
-		if (tag == DW_TAG_subrange_type)
-			break;
-	} while (dwarf_siblingof(&die_type, &die_type));
-
-	if (tag != DW_TAG_subrange_type)
-		return FALSE;
-
-	if (dwarf_attr(&die_type, DW_AT_upper_bound, &attr) == NULL)
-		return FALSE;
-
-	if (dwarf_formudata(&attr, &upper_bound) < 0)
-		return FALSE;
-
-	if (upper_bound < 0)
-		return FALSE;
-
-	dwarf_info.array_length = upper_bound + 1;
-
-	return TRUE;
-}
-
-static int
-check_array_type(Dwarf *dwarfd, Dwarf_Die *die)
-{
-	int tag;
-	Dwarf_Die die_type;
-
-	if (!get_die_type(dwarfd, die, &die_type)) {
-		ERRMSG("Can't get CU die of DW_AT_type.\n");
-		return FALSE;
-	}
-	tag = dwarf_tag(&die_type);
-	if (tag == DW_TAG_array_type)
-		dwarf_info.array_length = FOUND_ARRAY_TYPE;
-
-	return TRUE;
-}
-
-/*
- * Function for searching struct page.union.struct.mapping.
- */
-int
-__search_mapping(Dwarf *dwarfd, Dwarf_Die *die, long *offset)
-{
-	int tag;
-	const char *name;
-	Dwarf_Die child, *walker;
-
-	if (dwarf_child(die, &child) != 0)
-		return FALSE;
-
-	walker = &child;
-	do {
-		tag  = dwarf_tag(walker);
-		name = dwarf_diename(walker);
-
-		if (tag != DW_TAG_member)
-			continue;
-		if ((!name) || strcmp(name, dwarf_info.member_name))
-			continue;
-		if (!get_data_member_location(walker, offset))
-			continue;
-		return TRUE;
-
-	} while (!dwarf_siblingof(walker, walker));
-
-	return FALSE;
-}
-
-/*
- * Function for searching struct page.union.struct.
- */
-int
-search_mapping(Dwarf *dwarfd, Dwarf_Die *die, long *offset)
-{
-	Dwarf_Die child, *walker;
-	Dwarf_Die die_struct;
-
-	if (dwarf_child(die, &child) != 0)
-		return FALSE;
-
-	walker = &child;
-
-	do {
-		if (dwarf_tag(walker) != DW_TAG_member)
-			continue;
-		if (!get_die_type(dwarfd, walker, &die_struct))
-			continue;
-		if (dwarf_tag(&die_struct) != DW_TAG_structure_type)
-			continue;
-		if (__search_mapping(dwarfd, &die_struct, offset))
-			return TRUE;
-	} while (!dwarf_siblingof(walker, walker));
-
-	return FALSE;
-}
-
-static void
-search_member(Dwarf *dwarfd, Dwarf_Die *die)
-{
-	int tag;
-	long offset, offset_union;
-	const char *name;
-	Dwarf_Die child, *walker, die_union;
-
-	if (dwarf_child(die, &child) != 0)
-		return;
-
-	walker = &child;
-
-	do {
-		tag  = dwarf_tag(walker);
-		name = dwarf_diename(walker);
-
-		if (tag != DW_TAG_member)
-			continue;
-
-		switch (dwarf_info.cmd) {
-		case DWARF_INFO_GET_MEMBER_OFFSET:
-			if ((!name) || strcmp(name, dwarf_info.member_name))
-				continue;
-			/*
-			 * Get the member offset.
-			 */
-			if (!get_data_member_location(walker, &offset))
-				continue;
-			dwarf_info.member_offset = offset;
-			return;
-		case DWARF_INFO_GET_MEMBER_OFFSET_IN_UNION:
-			if (!get_die_type(dwarfd, walker, &die_union))
-				continue;
-			if (dwarf_tag(&die_union) != DW_TAG_union_type)
-				continue;
-			/*
-			 * Search page.mapping in union.
-			 */
-			if (!search_mapping(dwarfd, &die_union, &offset_union))
-				continue;
-			/*
-			 * Get the member offset.
-			 */
-			if (!get_data_member_location(walker, &offset))
- 				continue;
-			dwarf_info.member_offset = offset + offset_union;
- 			return;
-		case DWARF_INFO_GET_MEMBER_OFFSET_1ST_UNION:
-			if (!get_die_type(dwarfd, walker, &die_union))
-				continue;
-			if (dwarf_tag(&die_union) != DW_TAG_union_type)
-				continue;
-			/*
-			 * Get the member offset.
-			 */
-			if (!get_data_member_location(walker, &offset))
-				continue;
-			dwarf_info.member_offset = offset;
-			return;
-		case DWARF_INFO_GET_MEMBER_ARRAY_LENGTH:
-			if ((!name) || strcmp(name, dwarf_info.member_name))
-				continue;
-			/*
-			 * Get the member length.
-			 */
-			if (!get_data_array_length(dwarfd, walker))
-				continue;
-			return;
-		}
-	} while (!dwarf_siblingof(walker, walker));
-
-	/*
-	 * Return even if not found.
-	 */
-	return;
-}
-
-int
-is_search_structure(int cmd)
-{
-	if ((cmd == DWARF_INFO_GET_STRUCT_SIZE)
-	    || (cmd == DWARF_INFO_GET_MEMBER_OFFSET)
-	    || (cmd == DWARF_INFO_GET_MEMBER_OFFSET_IN_UNION)
-	    || (cmd == DWARF_INFO_GET_MEMBER_OFFSET_1ST_UNION)
-	    || (cmd == DWARF_INFO_GET_MEMBER_ARRAY_LENGTH))
-		return TRUE;
-	else
-		return FALSE;
-}
-
-int
-is_search_number(int cmd)
-{
-	if (cmd == DWARF_INFO_GET_ENUM_NUMBER)
-		return TRUE;
-	else
-		return FALSE;
-}
-
-int
-is_search_symbol(int cmd)
-{
-	if ((cmd == DWARF_INFO_GET_SYMBOL_ARRAY_LENGTH)
-	    || (cmd == DWARF_INFO_CHECK_SYMBOL_ARRAY_TYPE))
-		return TRUE;
-	else
-		return FALSE;
-}
-
-int
-is_search_typedef(int cmd)
-{
-	if ((cmd == DWARF_INFO_GET_TYPEDEF_SIZE)
-	    || (cmd == DWARF_INFO_GET_TYPEDEF_SRCNAME))
-		return TRUE;
-	else
-		return FALSE;
-}
-
-static void
-search_structure(Dwarf *dwarfd, Dwarf_Die *die, int *found)
-{
-	int tag;
-	const char *name;
-
-	/*
-	 * If we get to here then we don't have any more
-	 * children, check to see if this is a relevant tag
-	 */
-	do {
-		tag  = dwarf_tag(die);
-		name = dwarf_diename(die);
-		if ((tag != DW_TAG_structure_type) || (!name)
-		    || strcmp(name, dwarf_info.struct_name))
-			continue;
-		/*
-		 * Skip if DW_AT_byte_size is not included.
-		 */
-		dwarf_info.struct_size = dwarf_bytesize(die);
-
-		if (dwarf_info.struct_size > 0)
-			break;
-
-	} while (!dwarf_siblingof(die, die));
-
-	if (dwarf_info.struct_size <= 0) {
-		/*
-		 * Not found the demanded structure.
-		 */
-		return;
-	}
-
-	/*
-	 * Found the demanded structure.
-	 */
-	*found = TRUE;
-	switch (dwarf_info.cmd) {
-	case DWARF_INFO_GET_STRUCT_SIZE:
-		break;
-	case DWARF_INFO_GET_MEMBER_OFFSET:
-	case DWARF_INFO_GET_MEMBER_OFFSET_IN_UNION:
-	case DWARF_INFO_GET_MEMBER_OFFSET_1ST_UNION:
-	case DWARF_INFO_GET_MEMBER_ARRAY_LENGTH:
-		search_member(dwarfd, die);
-		break;
-	}
-}
-
-static void
-search_number(Dwarf *dwarfd, Dwarf_Die *die, int *found)
-{
-	int tag;
-	Dwarf_Word const_value;
-	Dwarf_Attribute attr;
-	Dwarf_Die child, *walker;
-	const char *name;
-
-	do {
-		tag  = dwarf_tag(die);
-		if (tag != DW_TAG_enumeration_type)
-			continue;
-
-		if (dwarf_child(die, &child) != 0)
-			continue;
-
-		walker = &child;
-
-		do {
-			tag  = dwarf_tag(walker);
-			name = dwarf_diename(walker);
-
-			if ((tag != DW_TAG_enumerator) || (!name)
-			    || strcmp(name, dwarf_info.enum_name))
-				continue;
-
-			if (!dwarf_attr(walker, DW_AT_const_value, &attr))
-				continue;
-
-			if (dwarf_formudata(&attr, &const_value) < 0)
-				continue;
-
-			*found = TRUE;
-			dwarf_info.enum_number = (long)const_value;
-
-		} while (!dwarf_siblingof(walker, walker));
-
-	} while (!dwarf_siblingof(die, die));
-}
-
-static void
-search_typedef(Dwarf *dwarfd, Dwarf_Die *die, int *found)
-{
-	int tag = 0;
-	char *src_name = NULL;
-	const char *name;
-	Dwarf_Die die_type;
-
-	/*
-	 * If we get to here then we don't have any more
-	 * children, check to see if this is a relevant tag
-	 */
-	do {
-		tag  = dwarf_tag(die);
-		name = dwarf_diename(die);
-
-		if ((tag != DW_TAG_typedef) || (!name)
-		    || strcmp(name, dwarf_info.struct_name))
-			continue;
-
-		if (dwarf_info.cmd == DWARF_INFO_GET_TYPEDEF_SIZE) {
-			if (!get_die_type(dwarfd, die, &die_type)) {
-				ERRMSG("Can't get CU die of DW_AT_type.\n");
-				break;
-			}
-			dwarf_info.struct_size = dwarf_bytesize(&die_type);
-			if (dwarf_info.struct_size <= 0)
-				continue;
-
-			*found = TRUE;
-			break;
-		} else if (dwarf_info.cmd == DWARF_INFO_GET_TYPEDEF_SRCNAME) {
-			src_name = (char *)dwarf_decl_file(die);
-			if (!src_name)
-				continue;
-
-			*found = TRUE;
-			strncpy(dwarf_info.src_name, src_name, LEN_SRCFILE);
-			break;
-		}
-	} while (!dwarf_siblingof(die, die));
-}
-
-static void
-search_symbol(Dwarf *dwarfd, Dwarf_Die *die, int *found)
-{
-	int tag;
-	const char *name;
-
-	/*
-	 * If we get to here then we don't have any more
-	 * children, check to see if this is a relevant tag
-	 */
-	do {
-		tag  = dwarf_tag(die);
-		name = dwarf_diename(die);
-
-		if ((tag == DW_TAG_variable) && (name)
-		    && !strcmp(name, dwarf_info.symbol_name))
-			break;
-
-	} while (!dwarf_siblingof(die, die));
-
-	if ((tag != DW_TAG_variable) || (!name)
-	    || strcmp(name, dwarf_info.symbol_name)) {
-		/*
-		 * Not found the demanded symbol.
-		 */
-		return;
-	}
-
-	/*
-	 * Found the demanded symbol.
-	 */
-	*found = TRUE;
-	switch (dwarf_info.cmd) {
-	case DWARF_INFO_GET_SYMBOL_ARRAY_LENGTH:
-		get_data_array_length(dwarfd, die);
-		break;
-	case DWARF_INFO_CHECK_SYMBOL_ARRAY_TYPE:
-		check_array_type(dwarfd, die);
-		break;
-	}
-}
-
-static void
-search_die_tree(Dwarf *dwarfd, Dwarf_Die *die, int *found)
-{
-	Dwarf_Die child;
-
-	/*
-	 * start by looking at the children
-	 */
-	if (dwarf_child(die, &child) == 0)
-		search_die_tree(dwarfd, &child, found);
-
-	if (*found)
-		return;
-
-	if (is_search_structure(dwarf_info.cmd))
-		search_structure(dwarfd, die, found);
-
-	else if (is_search_number(dwarf_info.cmd))
-		search_number(dwarfd, die, found);
-
-	else if (is_search_symbol(dwarf_info.cmd))
-		search_symbol(dwarfd, die, found);
-
-	else if (is_search_typedef(dwarf_info.cmd))
-		search_typedef(dwarfd, die, found);
-}
-
-int
-get_debug_info(void)
-{
-	int found = FALSE;
-	char *name = NULL;
-	size_t shstrndx, header_size;
-	uint8_t address_size, offset_size;
-	Dwarf *dwarfd = NULL;
-	Elf *elfd = NULL;
-	Dwarf_Off off = 0, next_off = 0, abbrev_offset = 0;
-	Elf_Scn *scn = NULL;
-	GElf_Shdr scnhdr_mem, *scnhdr = NULL;
-	Dwarf_Die cu_die;
-	const off_t failed = (off_t)-1;
-
-	int ret = FALSE;
-
-	if (lseek(dwarf_info.fd_debuginfo, 0, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the kernel file(%s). %s\n",
-		    dwarf_info.name_debuginfo, strerror(errno));
-		return FALSE;
-	}
-	if (!(elfd = elf_begin(dwarf_info.fd_debuginfo, ELF_C_READ_MMAP, NULL))) {
-		ERRMSG("Can't get first elf header of %s.\n",
-		    dwarf_info.name_debuginfo);
-		return FALSE;
-	}
-	if (!(dwarfd = dwarf_begin_elf(elfd, DWARF_C_READ, NULL))) {
-		ERRMSG("Can't create a handle for a new debug session.\n");
-		goto out;
-	}
-	if (elf_getshstrndx(elfd, &shstrndx) < 0) {
-		ERRMSG("Can't get the section index of the string table.\n");
-		goto out;
-	}
-
-	/*
-	 * Search for ".debug_info" section.
-	 */
-	while ((scn = elf_nextscn(elfd, scn)) != NULL) {
-		scnhdr = gelf_getshdr(scn, &scnhdr_mem);
-		name = elf_strptr(elfd, shstrndx, scnhdr->sh_name);
-		if (!strcmp(name, ".debug_info"))
-			break;
-	}
-	if (strcmp(name, ".debug_info")) {
-		ERRMSG("Can't get .debug_info section.\n");
-		goto out;
-	}
-
-	/*
-	 * Search by each CompileUnit.
-	 */
-	while (dwarf_nextcu(dwarfd, off, &next_off, &header_size,
-	    &abbrev_offset, &address_size, &offset_size) == 0) {
-		off += header_size;
-		if (dwarf_offdie(dwarfd, off, &cu_die) == NULL) {
-			ERRMSG("Can't get CU die.\n");
-			goto out;
-		}
-		search_die_tree(dwarfd, &cu_die, &found);
-		if (found)
-			break;
-		off = next_off;
-	}
-	ret = TRUE;
-out:
-	if (dwarfd != NULL)
-		dwarf_end(dwarfd);
-	if (elfd != NULL)
-		elf_end(elfd);
-
-	return ret;
-}
-
-/*
- * Get the size of structure.
- */
-long
-get_structure_size(char *structname, int flag_typedef)
-{
-	if (flag_typedef)
-		dwarf_info.cmd = DWARF_INFO_GET_TYPEDEF_SIZE;
-	else
-		dwarf_info.cmd = DWARF_INFO_GET_STRUCT_SIZE;
-
-	dwarf_info.struct_name = structname;
-	dwarf_info.struct_size = NOT_FOUND_STRUCTURE;
-
-	if (!get_debug_info())
-		return FAILED_DWARFINFO;
-
-	return dwarf_info.struct_size;
-}
-
-/*
- * Get the offset of member.
- */
-long
-get_member_offset(char *structname, char *membername, int cmd)
-{
-	dwarf_info.cmd = cmd;
-	dwarf_info.struct_name = structname;
-	dwarf_info.struct_size = NOT_FOUND_STRUCTURE;
-	dwarf_info.member_name = membername;
-	dwarf_info.member_offset = NOT_FOUND_STRUCTURE;
-
-	if (!get_debug_info())
-		return FAILED_DWARFINFO;
-
-	return dwarf_info.member_offset;
-}
-
-/*
- * Get the length of array.
- */
-long
-get_array_length(char *name01, char *name02, unsigned int cmd)
-{
-	switch (cmd) {
-	case DWARF_INFO_GET_SYMBOL_ARRAY_LENGTH:
-		dwarf_info.symbol_name = name01;
-		break;
-	case DWARF_INFO_CHECK_SYMBOL_ARRAY_TYPE:
-		dwarf_info.symbol_name = name01;
-		break;
-	case DWARF_INFO_GET_MEMBER_ARRAY_LENGTH:
-		dwarf_info.struct_name = name01;
-		dwarf_info.member_name = name02;
-		break;
-	}
-	dwarf_info.cmd           = cmd;
-	dwarf_info.struct_size   = NOT_FOUND_STRUCTURE;
-	dwarf_info.member_offset = NOT_FOUND_STRUCTURE;
-	dwarf_info.array_length  = NOT_FOUND_STRUCTURE;
-
-	if (!get_debug_info())
-		return FAILED_DWARFINFO;
-
-	return dwarf_info.array_length;
-}
-
-long
-get_enum_number(char *enum_name) {
-
-	dwarf_info.cmd         = DWARF_INFO_GET_ENUM_NUMBER;
-	dwarf_info.enum_name   = enum_name;
-	dwarf_info.enum_number = NOT_FOUND_NUMBER;
-
-	if (!get_debug_info())
-		return FAILED_DWARFINFO;
-
-	return dwarf_info.enum_number;
-}
-
-/*
- * Get the source filename.
- */
-int
-get_source_filename(char *structname, char *src_name, int cmd)
-{
-	dwarf_info.cmd = cmd;
-	dwarf_info.struct_name = structname;
-
-	if (!get_debug_info())
-		return FALSE;
-
-	strncpy(src_name, dwarf_info.src_name, LEN_SRCFILE);
-
-	return TRUE;
 }
 
 int
@@ -2210,6 +796,7 @@ get_symbol_info(void)
 	SYMBOL_INIT(log_buf_len, "log_buf_len");
 	SYMBOL_INIT(log_end, "log_end");
 	SYMBOL_INIT(max_pfn, "max_pfn");
+	SYMBOL_INIT(modules, "modules");
 
 	if (SYMBOL(node_data) != NOT_FOUND_SYMBOL)
 		SYMBOL_ARRAY_TYPE_INIT(node_data, "node_data");
@@ -2312,6 +899,20 @@ get_structure_info(void)
 
 	OFFSET_INIT(vm_struct.addr, "vm_struct", "addr");
 
+	/*
+	 * Get offset of the module members.
+	 */
+	SIZE_INIT(module, "module");
+	OFFSET_INIT(module.strtab, "module", "strtab");
+	OFFSET_INIT(module.symtab, "module", "symtab");
+	OFFSET_INIT(module.num_symtab, "module", "num_symtab");
+	OFFSET_INIT(module.list, "module", "list");
+	OFFSET_INIT(module.name, "module", "name");
+	OFFSET_INIT(module.module_core, "module", "module_core");
+	OFFSET_INIT(module.core_size, "module", "core_size");
+	OFFSET_INIT(module.module_init, "module", "module_init");
+	OFFSET_INIT(module.init_size, "module", "init_size");
+
 	ENUM_NUMBER_INIT(NR_FREE_PAGES, "NR_FREE_PAGES");
 	ENUM_NUMBER_INIT(N_ONLINE, "N_ONLINE");
 
@@ -2347,6 +948,8 @@ get_value_for_old_linux(void)
 int
 get_str_osrelease_from_vmlinux(void)
 {
+	int fd;
+	char *name;
 	struct utsname system_utsname;
 	unsigned long long utsname;
 	off_t offset;
@@ -2363,23 +966,21 @@ get_str_osrelease_from_vmlinux(void)
 		ERRMSG("Can't get the symbol of system_utsname.\n");
 		return FALSE;
 	}
-	offset = vaddr_to_offset_slow(dwarf_info.fd_debuginfo,
-	    dwarf_info.name_debuginfo, utsname);
+	get_fileinfo_of_debuginfo(&fd, &name);
 
+	offset = vaddr_to_offset_slow(fd, name, utsname);
 	if (!offset) {
 		ERRMSG("Can't convert vaddr (%llx) of utsname to an offset.\n",
 		    utsname);
 		return FALSE;
 	}
-	if (lseek(dwarf_info.fd_debuginfo, offset, SEEK_SET) == failed) {
-		ERRMSG("Can't seek %s. %s\n", dwarf_info.name_debuginfo,
-		    strerror(errno));
+	if (lseek(fd, offset, SEEK_SET) == failed) {
+		ERRMSG("Can't seek %s. %s\n", name, strerror(errno));
 		return FALSE;
 	}
-	if (read(dwarf_info.fd_debuginfo, &system_utsname, sizeof system_utsname)
+	if (read(fd, &system_utsname, sizeof system_utsname)
 	    != sizeof system_utsname) {
-		ERRMSG("Can't read %s. %s\n", dwarf_info.name_debuginfo,
-		    strerror(errno));
+		ERRMSG("Can't read %s. %s\n", name, strerror(errno));
 		return FALSE;
 	}
 	if (!strncpy(info->release, system_utsname.release, STRLEN_OSRELEASE)){
@@ -2443,8 +1044,8 @@ generate_vmcoreinfo(void)
 	if (!set_page_size(sysconf(_SC_PAGE_SIZE)))
 		return FALSE;
 
-	dwarf_info.fd_debuginfo   = info->fd_vmlinux;
-	dwarf_info.name_debuginfo = info->name_vmlinux;
+	set_dwarf_debuginfo("vmlinux", NULL,
+			    info->name_vmlinux, info->fd_vmlinux);
 
 	if (!get_symbol_info())
 		return FALSE;
@@ -2820,172 +1421,6 @@ read_vmcoreinfo(void)
 	return TRUE;
 }
 
-#define MAX_SIZE_NHDR	MAX(sizeof(Elf64_Nhdr), sizeof(Elf32_Nhdr))
-
-off_t
-offset_next_note(void *note)
-{
-	off_t offset;
-	Elf64_Nhdr *note64;
-	Elf32_Nhdr *note32;
-
-	/*
-	 * Both name and desc in ELF Note elements are padded to
-	 * 4 byte boundary.
-	 */
-	if (info->flag_elf64_memory) {
-		note64 = (Elf64_Nhdr *)note;
-		offset = sizeof(Elf64_Nhdr)
-		    + roundup(note64->n_namesz, 4)
-		    + roundup(note64->n_descsz, 4);
-	} else {
-		note32 = (Elf32_Nhdr *)note;
-		offset = sizeof(Elf32_Nhdr)
-		    + roundup(note32->n_namesz, 4)
-		    + roundup(note32->n_descsz, 4);
-	}
-	return offset;
-}
-
-int
-note_type(void *note)
-{
-	int type;
-	Elf64_Nhdr *note64;
-	Elf32_Nhdr *note32;
-
-	if (info->flag_elf64_memory) {
-		note64 = (Elf64_Nhdr *)note;
-		type = note64->n_type;
-	} else {
-		note32 = (Elf32_Nhdr *)note;
-		type = note32->n_type;
-	}
-	return type;
-}
-
-int
-note_descsz(void *note)
-{
-	int size;
-	Elf64_Nhdr *note64;
-	Elf32_Nhdr *note32;
-
-	if (info->flag_elf64_memory) {
-		note64 = (Elf64_Nhdr *)note;
-		size = note64->n_descsz;
-	} else {
-		note32 = (Elf32_Nhdr *)note;
-		size = note32->n_descsz;
-	}
-	return size;
-}
-
-off_t
-offset_note_desc(void *note)
-{
-	off_t offset;
-	Elf64_Nhdr *note64;
-	Elf32_Nhdr *note32;
-
-	if (info->flag_elf64_memory) {
-		note64 = (Elf64_Nhdr *)note;
-		offset = sizeof(Elf64_Nhdr) + roundup(note64->n_namesz, 4);
-	} else {
-		note32 = (Elf32_Nhdr *)note;
-		offset = sizeof(Elf32_Nhdr) + roundup(note32->n_namesz, 4);
-	}
-	return offset;
-}
-
-int
-get_pt_note_info(off_t off_note, unsigned long sz_note)
-{
-	int n_type, size_desc;
-	unsigned long p2m_mfn;
-	off_t offset, offset_desc, off_p2m = 0;
-	char buf[VMCOREINFO_XEN_NOTE_NAME_BYTES];
-	char note[MAX_SIZE_NHDR];
-	const off_t failed = (off_t)-1;
-
-	offset = off_note;
-	while (offset < off_note + sz_note) {
-		if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
-			ERRMSG("Can't seek the dump memory(%s). %s\n",
-			    info->name_memory, strerror(errno));
-			return FALSE;
-		}
-		if (read(info->fd_memory, note, sizeof(note)) != sizeof(note)) {
-			ERRMSG("Can't read the dump memory(%s). %s\n",
-			    info->name_memory, strerror(errno));
-			return FALSE;
-		}
-		if (read(info->fd_memory, &buf, sizeof(buf)) != sizeof(buf)) {
-			ERRMSG("Can't read the dump memory(%s). %s\n",
-			    info->name_memory, strerror(errno));
-			return FALSE;
-		}
-		n_type = note_type(note);
-
-		if (n_type == NT_PRSTATUS) {
-			info->nr_cpus++;
-			offset += offset_next_note(note);
-			continue;
-		}
-		offset_desc = offset + offset_note_desc(note);
-		size_desc   = note_descsz(note);
-
-		/*
-		 * Check whether /proc/vmcore contains vmcoreinfo,
-		 * and get both the offset and the size.
-		 *
-		 * NOTE: The owner name of xen should be checked at first,
-		 *       because its name is "VMCOREINFO_XEN" and the one
-		 *       of linux is "VMCOREINFO".
-		 */
-		if (!strncmp(VMCOREINFO_XEN_NOTE_NAME, buf,
-		    VMCOREINFO_XEN_NOTE_NAME_BYTES)) {
-			info->offset_vmcoreinfo_xen = offset_desc;
-			info->size_vmcoreinfo_xen   = size_desc;
-		} else if (!strncmp(VMCOREINFO_NOTE_NAME, buf,
-		    VMCOREINFO_NOTE_NAME_BYTES)) {
-			info->offset_vmcoreinfo = offset_desc;
-			info->size_vmcoreinfo   = size_desc;
-
-		/*
-		 * Check whether /proc/vmcore contains xen's note.
-		 */
-		} else if (n_type == XEN_ELFNOTE_CRASH_INFO) {
-			vt.mem_flags |= MEMORY_XEN;
-			info->offset_xen_crash_info = offset_desc;
-			info->size_xen_crash_info   = size_desc;
-
-			off_p2m = offset + offset_next_note(note)
-					 - sizeof(p2m_mfn);
-			if (lseek(info->fd_memory, off_p2m, SEEK_SET)
-			    == failed){
-				ERRMSG("Can't seek the dump memory(%s). %s\n",
-				    info->name_memory, strerror(errno));
-				return FALSE;
-			}
-			if (read(info->fd_memory, &p2m_mfn, sizeof(p2m_mfn))
-			     != sizeof(p2m_mfn)) {
-				ERRMSG("Can't read the dump memory(%s). %s\n",
-				    info->name_memory, strerror(errno));
-				return FALSE;
-			}
-			info->p2m_mfn = p2m_mfn;
-		}
-		offset += offset_next_note(note);
-	}
-	if (vt.mem_flags & MEMORY_XEN)
-		DEBUG_MSG("Xen kdump\n");
-	else
-		DEBUG_MSG("Linux kdump\n");
-
-	return TRUE;
-}
-
 /*
  * Extract vmcoreinfo from /proc/vmcore and output it to /tmp/vmcoreinfo.tmp.
  */
@@ -3283,7 +1718,7 @@ get_mm_flatmem(void)
 		    strerror(errno));
 		return FALSE;
 	}
-	if (vt.mem_flags & MEMORY_XEN)
+	if (is_xen_memory())
 		dump_mem_map(0, info->dom0_mapnr, mem_map, 0);
 	else
 		dump_mem_map(0, info->max_mapnr, mem_map, 0);
@@ -3600,7 +2035,7 @@ get_mm_discontigmem(void)
 		}
 	}
 	i = num_mem_map - 1;
-	if (vt.mem_flags & MEMORY_XEN) {
+	if (is_xen_memory()) {
 		if (mmd[i].pfn_end < info->dom0_mapnr)
 			dump_mem_map(mmd[i].pfn_end, info->dom0_mapnr,
 			    NOT_MEMMAP_ADDR, id_mm);
@@ -3733,7 +2168,7 @@ get_mem_map_without_mm(void)
 		    strerror(errno));
 		return FALSE;
 	}
-	if (vt.mem_flags & MEMORY_XEN)
+	if (is_xen_memory())
 		dump_mem_map(0, info->dom0_mapnr, NOT_MEMMAP_ADDR, 0);
 	else
 		dump_mem_map(0, info->max_mapnr, NOT_MEMMAP_ADDR, 0);
@@ -3746,7 +2181,7 @@ get_mem_map(void)
 {
 	int ret;
 
-	if (vt.mem_flags & MEMORY_XEN) {
+	if (is_xen_memory()) {
 		if (!get_dom0_mapnr()) {
 			ERRMSG("Can't domain-0 pfn.\n");
 			return FALSE;
@@ -3839,9 +2274,11 @@ initialize_bitmap_memory(void)
 int
 initial(void)
 {
+	off_t offset;
+	unsigned long size;
 	int debug_info = FALSE;
 
-	if (!(vt.mem_flags & MEMORY_XEN) && info->flag_exclude_xen_dom) {
+	if (!is_xen_memory() && info->flag_exclude_xen_dom) {
 		MSG("'-X' option is disable,");
 		MSG("because %s is not Xen's memory core image.\n", info->name_memory);
 		MSG("Commandline parameter is invalid.\n");
@@ -3877,8 +2314,8 @@ initial(void)
 	 * Get the debug information for analysis from the kernel file
 	 */
 	} else if (info->name_vmlinux) {
-		dwarf_info.fd_debuginfo   = info->fd_vmlinux;
-		dwarf_info.name_debuginfo = info->name_vmlinux;
+		set_dwarf_debuginfo("vmlinux", NULL,
+					info->name_vmlinux, info->fd_vmlinux);
 
 		if (!get_symbol_info())
 			return FALSE;
@@ -3895,7 +2332,7 @@ initial(void)
 		 * Check whether /proc/vmcore contains vmcoreinfo,
 		 * and get both the offset and the size.
 		 */
-		if (!info->offset_vmcoreinfo || !info->size_vmcoreinfo) {
+		if (!has_vmcoreinfo()) {
 			if (info->max_dump_level <= DL_EXCLUDE_ZERO)
 				goto out;
 
@@ -3915,9 +2352,9 @@ initial(void)
 	 *       in /proc/vmcore. vmcoreinfo in /proc/vmcore is more reliable
 	 *       than -x/-i option.
 	 */
-	if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
-		if (!read_vmcoreinfo_from_vmcore(info->offset_vmcoreinfo,
-		    info->size_vmcoreinfo, FALSE))
+	if (has_vmcoreinfo()) {
+		get_vmcoreinfo(&offset, &size);
+		if (!read_vmcoreinfo_from_vmcore(offset, size, FALSE))
 			return FALSE;
 		debug_info = TRUE;
 	}
@@ -4087,7 +2524,7 @@ clear_bit_on_2nd_bitmap_for_kernel(unsigned long long pfn)
 {
 	unsigned long long maddr;
 
-	if (vt.mem_flags & MEMORY_XEN) {
+	if (is_xen_memory()) {
 		maddr = ptom_xen(pfn_to_paddr(pfn));
 		if (maddr == NOT_PADDR) {
 			ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
@@ -4270,6 +2707,18 @@ write_cache_bufsz(struct cache_data *cd)
 }
 
 int
+write_cache_zero(struct cache_data *cd, size_t size)
+{
+	if (!write_cache_bufsz(cd))
+		return FALSE;
+
+	memset(cd->buf + cd->buf_size, 0, size);
+	cd->buf_size += size;
+
+	return write_cache_bufsz(cd);
+}
+
+int
 read_buf_from_stdin(void *buf, int buf_size)
 {
 	int read_size = 0, tmp_read_size = 0;
@@ -4415,33 +2864,6 @@ rearrange_dumpdata(void)
 	return TRUE;
 }
 
-/*
- * Same as paddr_to_offset() but makes sure that the specified offset (hint)
- * in the segment.
- */
-off_t
-paddr_to_offset2(unsigned long long paddr, off_t hint)
-{
-	int i;
-	off_t offset;
-	unsigned long long len;
-	struct pt_load_segment *pls;
-
-	for (i = offset = 0; i < info->num_load_memory; i++) {
-		pls = &info->pt_load_segments[i];
-		len = pls->phys_end - pls->phys_start;
-		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)
-		    && (hint >= pls->file_offset)
-		    && (hint < pls->file_offset + len)) {
-			offset = (off_t)(paddr - pls->phys_start) +
-				pls->file_offset;
-				break;
-		}
-	}
-	return offset;
-}
-
 unsigned long long
 page_to_pfn(unsigned long page)
 {
@@ -4585,7 +3007,7 @@ dump_dmesg()
 		return FALSE;
 
 	if (!info->flag_refiltering) {
-		if (!get_elf_info())
+		if (!get_elf_info(info->fd_memory, info->name_memory))
 			return FALSE;
 	}
 	if (!initial())
@@ -4824,9 +3246,10 @@ int
 create_1st_bitmap(void)
 {
 	int i;
+	unsigned int num_pt_loads = get_num_pt_loads();
  	char buf[info->page_size];
 	unsigned long long pfn, pfn_start, pfn_end, pfn_bitmap1;
-	struct pt_load_segment *pls;
+	unsigned long long phys_start, phys_end;
 	struct timeval tv_start;
 	off_t offset_page;
 
@@ -4859,13 +3282,13 @@ create_1st_bitmap(void)
 	/*
 	 * If page is on memory hole, set bit on the 1st-bitmap.
 	 */
-	for (i = pfn_bitmap1 = 0; i < info->num_load_memory; i++) {
+	pfn_bitmap1 = 0;
+	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 
-		print_progress(PROGRESS_HOLES, i, info->num_load_memory);
+		print_progress(PROGRESS_HOLES, i, num_pt_loads);
 
-		pls = &info->pt_load_segments[i];
-		pfn_start = paddr_to_pfn(pls->phys_start);
-		pfn_end   = paddr_to_pfn(pls->phys_end);
+		pfn_start = paddr_to_pfn(phys_start);
+		pfn_end   = paddr_to_pfn(phys_end);
 
 		if (!is_in_segs(pfn_to_paddr(pfn_start)))
 			pfn_start++;
@@ -4914,7 +3337,7 @@ exclude_zero_pages(void)
 		if (!is_dumpable(&bitmap2, pfn))
 			continue;
 
-		if (vt.mem_flags & MEMORY_XEN) {
+		if (is_xen_memory()) {
 			if (!readmem(MADDR_XEN, paddr, buf, info->page_size)) {
 				ERRMSG("Can't get the page data(pfn:%llx, max_mapnr:%llx).\n",
 				    pfn, info->max_mapnr);
@@ -4964,7 +3387,7 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 		/*
 		 * Exclude the memory hole.
 		 */
-		if (vt.mem_flags & MEMORY_XEN) {
+		if (is_xen_memory()) {
 			maddr = ptom_xen(pfn_to_paddr(pfn));
 			if (maddr == NOT_PADDR) {
 				ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
@@ -5239,30 +3662,6 @@ out:
 }
 
 int
-get_phnum_memory(void)
-{
-	int phnum;
-	Elf64_Ehdr ehdr64;
-	Elf32_Ehdr ehdr32;
-
-	if (info->flag_elf64_memory) { /* ELF64 */
-		if (!get_elf64_ehdr(&ehdr64)) {
-			ERRMSG("Can't get ehdr64.\n");
-			return FALSE;
-		}
-		phnum = ehdr64.e_phnum;
-	} else {                /* ELF32 */
-		if (!get_elf32_ehdr(&ehdr32)) {
-			ERRMSG("Can't get ehdr32.\n");
-			return FALSE;
-		}
-		phnum = ehdr32.e_phnum;
-	}
-
-	return phnum;
-}
-
-int
 get_loads_dumpfile(void)
 {
 	int i, phnum, num_new_load = 0;
@@ -5278,7 +3677,7 @@ get_loads_dumpfile(void)
 		return FALSE;
 
 	for (i = 0; i < phnum; i++) {
-		if (!get_elf_phdr_memory(i, &load))
+		if (!get_phdr_memory(i, &load))
 			return FALSE;
 		if (load.p_type != PT_LOAD)
 			continue;
@@ -5396,7 +3795,7 @@ write_elf_phdr(struct cache_data *cd_hdr, Elf64_Phdr *load)
 {
 	Elf32_Phdr load32;
 
-	if (info->flag_elf64_memory) { /* ELF64 */
+	if (is_elf64_memory()) { /* ELF64 */
 		if (!write_cache(cd_hdr, load, sizeof(Elf64_Phdr)))
 			return FALSE;
 
@@ -5422,7 +3821,7 @@ write_elf_header(struct cache_data *cd_header)
 {
 	int i, num_loads_dumpfile, phnum;
 	off_t offset_note_memory, offset_note_dumpfile;
-	size_t size_note;
+	size_t size_note, size_eraseinfo = 0;
 	Elf64_Ehdr ehdr64;
 	Elf32_Ehdr ehdr32;
 	Elf64_Phdr note;
@@ -5443,8 +3842,9 @@ write_elf_header(struct cache_data *cd_header)
 		goto out;
 	}
 
-	if (info->flag_elf64_memory) { /* ELF64 */
-		if (!get_elf64_ehdr(&ehdr64)) {
+	if (is_elf64_memory()) { /* ELF64 */
+		if (!get_elf64_ehdr(info->fd_memory,
+				    info->name_memory, &ehdr64)) {
 			ERRMSG("Can't get ehdr64.\n");
 			goto out;
 		}
@@ -5453,7 +3853,8 @@ write_elf_header(struct cache_data *cd_header)
 		 */
 		ehdr64.e_phnum = 1 + num_loads_dumpfile;
 	} else {                /* ELF32 */
-		if (!get_elf32_ehdr(&ehdr32)) {
+		if (!get_elf32_ehdr(info->fd_memory,
+				    info->name_memory, &ehdr32)) {
 			ERRMSG("Can't get ehdr32.\n");
 			goto out;
 		}
@@ -5466,7 +3867,7 @@ write_elf_header(struct cache_data *cd_header)
 	/*
 	 * Write an ELF header.
 	 */
-	if (info->flag_elf64_memory) { /* ELF64 */
+	if (is_elf64_memory()) { /* ELF64 */
 		if (!write_buffer(info->fd_dumpfile, 0, &ehdr64, sizeof(ehdr64),
 		    info->name_dumpfile))
 			goto out;
@@ -5478,13 +3879,27 @@ write_elf_header(struct cache_data *cd_header)
 	}
 
 	/*
+	 * Pre-calculate the required size to store eraseinfo in ELF note
+	 * section so that we can add enough space in ELF notes section and
+	 * adjust the PT_LOAD offset accordingly.
+	 */
+	size_eraseinfo = get_size_eraseinfo();
+
+	/*
+	 * Store the size_eraseinfo for later use in write_elf_eraseinfo()
+	 * function.
+	 */
+	info->size_elf_eraseinfo = size_eraseinfo;
+	DEBUG_MSG("erase info size: %lu\n", info->size_elf_eraseinfo);
+
+	/*
 	 * Write a PT_NOTE header.
 	 */
 	if (!(phnum = get_phnum_memory()))
 		goto out;
 
 	for (i = 0; i < phnum; i++) {
-		if (!get_elf_phdr_memory(i, &note))
+		if (!get_phdr_memory(i, &note))
 			return FALSE;
 		if (note.p_type == PT_NOTE)
 			break;
@@ -5494,7 +3909,7 @@ write_elf_header(struct cache_data *cd_header)
 		goto out;
 	}
 
-	if (info->flag_elf64_memory) { /* ELF64 */
+	if (is_elf64_memory()) { /* ELF64 */
 		cd_header->offset    = sizeof(ehdr64);
 		offset_note_dumpfile = sizeof(ehdr64)
 		    + sizeof(Elf64_Phdr) * ehdr64.e_phnum;
@@ -5506,6 +3921,19 @@ write_elf_header(struct cache_data *cd_header)
 	offset_note_memory = note.p_offset;
 	note.p_offset      = offset_note_dumpfile;
 	size_note          = note.p_filesz;
+
+	/*
+	 * Modify the note size in PT_NOTE header to accomodate eraseinfo data.
+	 * Eraseinfo will be written later.
+	 */
+	if (info->size_elf_eraseinfo) {
+		if (is_elf64_memory())
+			note.p_filesz += sizeof(Elf64_Nhdr);
+		else
+			note.p_filesz += sizeof(Elf32_Nhdr);
+		note.p_filesz += roundup(ERASEINFO_NOTE_NAME_BYTES, 4) +
+					roundup(size_eraseinfo, 4);
+	}
 
 	if (!write_elf_phdr(cd_header, &note))
 		goto out;
@@ -5533,10 +3961,14 @@ write_elf_header(struct cache_data *cd_header)
 	    size_note, info->name_dumpfile))
 		goto out;
 
+	/* Set the size_note with new size. */
+	size_note          = note.p_filesz;
+
 	/*
 	 * Set an offset of PT_LOAD segment.
 	 */
 	info->offset_load_dumpfile = offset_note_dumpfile + size_note;
+	info->offset_note_dumpfile = offset_note_dumpfile;
 
 	ret = TRUE;
 out:
@@ -5551,6 +3983,8 @@ write_kdump_header(void)
 {
 	int ret = FALSE;
 	size_t size;
+	off_t offset_note, offset_vmcoreinfo;
+	unsigned long size_note, size_vmcoreinfo;
 	struct disk_dump_header *dh = info->dump_header;
 	struct kdump_sub_header kh;
 	char *buf = NULL;
@@ -5558,16 +3992,18 @@ write_kdump_header(void)
 	if (info->flag_elf_dumpfile)
 		return FALSE;
 
+	get_pt_note(&offset_note, &size_note);
+
 	/*
 	 * Write common header
 	 */
 	strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
-	dh->header_version = 4;
+	dh->header_version = 5;
   	dh->block_size     = info->page_size;
-	dh->sub_hdr_size   = sizeof(kh) + info->size_note;
+	dh->sub_hdr_size   = sizeof(kh) + size_note;
 	dh->sub_hdr_size   = divideup(dh->sub_hdr_size, dh->block_size);
 	dh->max_mapnr      = info->max_mapnr;
-	dh->nr_cpus        = info->nr_cpus;
+	dh->nr_cpus        = get_nr_cpus();
 	dh->bitmap_blocks  = divideup(info->len_bitmap, dh->block_size);
 	memcpy(&dh->timestamp, &info->timestamp, sizeof(dh->timestamp));
 	memcpy(&dh->utsname, &info->system_utsname, sizeof(dh->utsname));
@@ -5588,27 +4024,26 @@ write_kdump_header(void)
 		kh.start_pfn = info->split_start_pfn;
 		kh.end_pfn   = info->split_end_pfn;
 	}
-	if (info->offset_note && info->size_note) {
+	if (has_pt_note()) {
 		/*
 		 * Write ELF note section
 		 */
 		kh.offset_note
 			= DISKDUMP_HEADER_BLOCKS * dh->block_size + sizeof(kh);
-		kh.size_note = info->size_note;
+		kh.size_note = size_note;
 
-		buf = malloc(info->size_note);
+		buf = malloc(size_note);
 		if (buf == NULL) {
 			ERRMSG("Can't allocate memory for ELF note section. %s\n",
 			    strerror(errno));
 			return FALSE;
 		}
-		if (lseek(info->fd_memory, info->offset_note, SEEK_SET) < 0) {
+		if (lseek(info->fd_memory, offset_note, SEEK_SET) < 0) {
 			ERRMSG("Can't seek the dump memory(%s). %s\n",
 			    info->name_memory, strerror(errno));
 			goto out;
 		}
-		if (read(info->fd_memory, buf, info->size_note)
-		    != info->size_note) {
+		if (read(info->fd_memory, buf, size_note) != size_note) {
 			ERRMSG("Can't read the dump memory(%s). %s\n",
 			    info->name_memory, strerror(errno));
 			goto out;
@@ -5617,7 +4052,8 @@ write_kdump_header(void)
 		    kh.size_note, info->name_dumpfile))
 			goto out;
 
-		if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
+		if (has_vmcoreinfo()) {
+			get_vmcoreinfo(&offset_vmcoreinfo, &size_vmcoreinfo);
 			/*
 			 * Set vmcoreinfo data
 			 *
@@ -5625,15 +4061,16 @@ write_kdump_header(void)
 			 *       kh.offset_vmcoreinfo points the vmcoreinfo data.
 			 */
 			kh.offset_vmcoreinfo
-			    = info->offset_vmcoreinfo - info->offset_note
+			    = offset_vmcoreinfo - offset_note
 			      + kh.offset_note;
-			kh.size_vmcoreinfo = info->size_vmcoreinfo;
+			kh.size_vmcoreinfo = size_vmcoreinfo;
 		}
 	}
 	if (!write_buffer(info->fd_dumpfile, dh->block_size, &kh,
 	    size, info->name_dumpfile))
 		goto out;
 
+	info->sub_header = kh;
 	info->offset_bitmap1
 	    = (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size) * dh->block_size;
 
@@ -5643,26 +4080,6 @@ out:
 		free(buf);
 
 	return ret;
-}
-
-void
-print_progress(const char *msg, unsigned long current, unsigned long end)
-{
-	int progress;
-	time_t tm;
-	static time_t last_time = 0;
-
-	if (current < end) {
-		tm = time(NULL);
-		if (tm - last_time < 1)
-			return;
-		last_time = tm;
-		progress = current * 100 / end;
-	} else
-		progress = 100;
-
-	PROGRESS_MSG("\r");
-	PROGRESS_MSG("%-" PROGRESS_MAXLEN "s: [%3d %%] ", msg, progress);
 }
 
 unsigned long long
@@ -5679,6 +4096,7 @@ get_num_dumpable(void)
 	}
 	return num_dumpable;
 }
+
 
 int
 write_elf_load_segment(struct cache_data *cd_page, unsigned long long paddr,
@@ -5711,6 +4129,8 @@ write_elf_load_segment(struct cache_data *cd_page, unsigned long long paddr,
 			    info->name_memory, strerror(errno));
 			return FALSE;
 		}
+		filter_data_buffer((unsigned char *)buf, paddr, bufsz_write);
+		paddr += bufsz_write;
 		if (!write_cache(cd_page, buf, bufsz_write))
 			return FALSE;
 
@@ -5750,7 +4170,7 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	gettimeofday(&tv_start, NULL);
 
 	for (i = 0; i < phnum; i++) {
-		if (!get_elf_phdr_memory(i, &load))
+		if (!get_phdr_memory(i, &load))
 			return FALSE;
 
 		if (load.p_type != PT_LOAD)
@@ -5827,7 +4247,15 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 			 */
 			load.p_memsz  = memsz;
 			load.p_filesz = filesz;
-			load.p_offset = off_seg_load;
+			if (load.p_filesz)
+				load.p_offset = off_seg_load;
+			else
+				/*
+				 * If PT_LOAD segment does not have real data
+				 * due to the all excluded pages, the file
+				 * offset is not effective and it should be 0.
+				 */
+				load.p_offset = 0;
 
 			/*
 			 * Write a PT_LOAD header.
@@ -5838,9 +4266,10 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 			/*
 			 * Write a PT_LOAD segment.
 			 */
-			if (!write_elf_load_segment(cd_page, paddr, off_memory,
-			    load.p_filesz))
-				return FALSE;
+			if (load.p_filesz)
+				if (!write_elf_load_segment(cd_page, paddr,
+				    off_memory, load.p_filesz))
+					return FALSE;
 
 			load.p_paddr += load.p_memsz;
 #ifdef __x86__
@@ -5877,8 +4306,10 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 		/*
 		 * Write a PT_LOAD segment.
 		 */
-		if (!write_elf_load_segment(cd_page, paddr, off_memory, load.p_filesz))
-			return FALSE;
+		if (load.p_filesz)
+			if (!write_elf_load_segment(cd_page, paddr,
+						    off_memory, load.p_filesz))
+				return FALSE;
 
 		off_seg_load += load.p_filesz;
 	}
@@ -5929,6 +4360,7 @@ read_pfn(unsigned long long pfn, unsigned char *buf)
 			ERRMSG("Can't get the page data.\n");
 			return FALSE;
 		}
+		filter_data_buffer(buf, paddr, info->page_size);
 		return TRUE;
 	}
 
@@ -5951,6 +4383,7 @@ read_pfn(unsigned long long pfn, unsigned char *buf)
 		ERRMSG("Can't get the page data.\n");
 		return FALSE;
 	}
+	filter_data_buffer(buf, paddr, size1);
 	if (size1 != info->page_size) {
 		size2 = info->page_size - size1;
 		if (!offset2) {
@@ -5960,6 +4393,7 @@ read_pfn(unsigned long long pfn, unsigned char *buf)
 				ERRMSG("Can't get the page data.\n");
 				return FALSE;
 			}
+			filter_data_buffer(buf + size1, paddr + size1, size2);
 		}
 	}
 	return TRUE;
@@ -6009,7 +4443,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	/*
 	 * Set a fileoffset of Physical Address 0x0.
 	 */
-	if (lseek(info->fd_memory, info->offset_load_memory, SEEK_SET)
+	if (lseek(info->fd_memory, get_offset_pt_load_memory(), SEEK_SET)
 	    == failed) {
 		ERRMSG("Can't seek the dump memory(%s). %s\n",
 		    info->name_memory, strerror(errno));
@@ -6118,6 +4552,226 @@ out:
 		free(buf_out);
 
 	return ret;
+}
+
+/*
+ * Copy eraseinfo from input dumpfile/vmcore to output dumpfile.
+ */
+static int
+copy_eraseinfo(struct cache_data *cd_eraseinfo)
+{
+	char *buf = NULL;
+	off_t offset;
+	unsigned long size;
+	int ret = FALSE;
+
+	get_eraseinfo(&offset, &size);
+	buf = malloc(size);
+	if (buf == NULL) {
+		ERRMSG("Can't allocate memory for erase info section. %s\n",
+		    strerror(errno));
+		return FALSE;
+	}
+	if (lseek(info->fd_memory, offset, SEEK_SET) < 0) {
+		ERRMSG("Can't seek the dump memory(%s). %s\n",
+		    info->name_memory, strerror(errno));
+		goto out;
+	}
+	if (read(info->fd_memory, buf, size) != size) {
+		ERRMSG("Can't read the dump memory(%s). %s\n",
+		    info->name_memory, strerror(errno));
+		goto out;
+	}
+	if (!write_cache(cd_eraseinfo, buf, size))
+		goto out;
+	ret = TRUE;
+out:
+	if (buf)
+		free(buf);
+	return ret;
+}
+
+static int
+update_eraseinfo_of_sub_header(off_t offset_eraseinfo,
+			       unsigned long size_eraseinfo)
+{
+	off_t offset;
+
+	/* seek to kdump sub header offset */
+	offset = DISKDUMP_HEADER_BLOCKS * info->page_size;
+
+	info->sub_header.offset_eraseinfo = offset_eraseinfo;
+	info->sub_header.size_eraseinfo   = size_eraseinfo;
+
+	if (!write_buffer(info->fd_dumpfile, offset, &info->sub_header,
+			sizeof(struct kdump_sub_header), info->name_dumpfile))
+		return FALSE;
+
+	return TRUE;
+}
+
+/*
+ * Traverse through eraseinfo nodes and write it to the o/p dumpfile if the
+ * node has erased flag set.
+ */
+int
+write_eraseinfo(struct cache_data *cd_page, unsigned long *size_out)
+{
+	int i, j, obuf_size = 0, ei_size = 0;
+	int ret = FALSE;
+	unsigned long size_eraseinfo = 0;
+	char *obuf = NULL;
+	char size_str[MAX_SIZE_STR_LEN];
+
+	for (i = 1; i < num_erase_info; i++) {
+		if (!erase_info[i].erased)
+			continue;
+		for (j = 0; j < erase_info[i].num_sizes; j++) {
+			if (erase_info[i].sizes[j] > 0)
+				sprintf(size_str, "size %ld\n",
+						erase_info[i].sizes[j]);
+			else if (erase_info[i].sizes[j] == -1)
+				sprintf(size_str, "nullify\n");
+
+			/* Calculate the required buffer size. */
+			ei_size = strlen("erase ") +
+					strlen(erase_info[i].symbol_expr) + 1 +
+					strlen(size_str) +
+					1;
+			/*
+			 * If obuf is allocated in the previous run and is
+			 * big enough to hold current erase info string then
+			 * reuse it otherwise realloc.
+			 */
+			if (ei_size > obuf_size) {
+				obuf_size = ei_size;
+				obuf = realloc(obuf, obuf_size);
+				if (!obuf) {
+					ERRMSG("Can't allocate memory for"
+						" output buffer\n");
+					return FALSE;
+				}
+			}
+			sprintf(obuf, "erase %s %s", erase_info[i].symbol_expr,
+							size_str);
+			DEBUG_MSG(obuf);
+			if (!write_cache(cd_page, obuf, strlen(obuf)))
+				goto out;
+			size_eraseinfo += strlen(obuf);
+		}
+	}
+	/*
+	 * Write the remainder.
+	 */
+	if (!write_cache_bufsz(cd_page))
+		goto out;
+
+	*size_out = size_eraseinfo;
+	ret = TRUE;
+out:
+	if (obuf)
+		free(obuf);
+
+	return ret;
+}
+
+int
+write_elf_eraseinfo(struct cache_data *cd_header)
+{
+	char note[MAX_SIZE_NHDR];
+	char buf[ERASEINFO_NOTE_NAME_BYTES + 4];
+	off_t offset_eraseinfo;
+	unsigned long note_header_size, size_written, size_note;
+
+	if (!info->size_elf_eraseinfo)
+		return TRUE;
+
+	DEBUG_MSG("Writing erase info...\n");
+
+	/* calculate the eraseinfo ELF note offset */
+	get_pt_note(NULL, &size_note);
+	cd_header->offset = info->offset_note_dumpfile +
+				roundup(size_note, 4);
+
+	/* Write eraseinfo ELF note header. */
+	memset(note, 0, sizeof(note));
+	if (is_elf64_memory()) {
+		Elf64_Nhdr *nh = (Elf64_Nhdr *)note;
+
+		note_header_size = sizeof(Elf64_Nhdr);
+		nh->n_namesz = ERASEINFO_NOTE_NAME_BYTES;
+		nh->n_descsz = info->size_elf_eraseinfo;
+		nh->n_type = 0;
+	} else {
+		Elf32_Nhdr *nh = (Elf32_Nhdr *)note;
+
+		note_header_size = sizeof(Elf32_Nhdr);
+		nh->n_namesz = ERASEINFO_NOTE_NAME_BYTES;
+		nh->n_descsz = info->size_elf_eraseinfo;
+		nh->n_type = 0;
+	}
+	if (!write_cache(cd_header, note, note_header_size))
+		return FALSE;
+
+	/* Write eraseinfo Note name */
+	memset(buf, 0, sizeof(buf));
+	memcpy(buf, ERASEINFO_NOTE_NAME, ERASEINFO_NOTE_NAME_BYTES);
+	if (!write_cache(cd_header, buf,
+				roundup(ERASEINFO_NOTE_NAME_BYTES, 4)))
+		return FALSE;
+
+	offset_eraseinfo = cd_header->offset;
+	if (!write_eraseinfo(cd_header, &size_written))
+		return FALSE;
+
+	/*
+	 * The actual eraseinfo written may be less than pre-calculated size.
+	 * Hence fill up the rest of size with zero's.
+	 */
+	if (size_written < info->size_elf_eraseinfo)
+		write_cache_zero(cd_header,
+				info->size_elf_eraseinfo - size_written);
+
+	DEBUG_MSG("offset_eraseinfo: %llx, size_eraseinfo: %ld\n",
+		(unsigned long long)offset_eraseinfo, info->size_elf_eraseinfo);
+
+	return TRUE;
+}
+
+int
+write_kdump_eraseinfo(struct cache_data *cd_page)
+{
+	off_t offset_eraseinfo;
+	unsigned long size_eraseinfo, size_written;
+
+	DEBUG_MSG("Writing erase info...\n");
+	offset_eraseinfo = cd_page->offset;
+
+	/*
+	 * In case of refiltering copy the existing eraseinfo from input
+	 * dumpfile to o/p dumpfile.
+	 */
+	if (has_eraseinfo()) {
+		get_eraseinfo(NULL, &size_eraseinfo);
+		if (!copy_eraseinfo(cd_page))
+			return FALSE;
+	} else
+		size_eraseinfo = 0;
+
+	if (!write_eraseinfo(cd_page, &size_written))
+		return FALSE;
+
+	size_eraseinfo += size_written;
+	DEBUG_MSG("offset_eraseinfo: %llx, size_eraseinfo: %ld\n",
+		(unsigned long long)offset_eraseinfo, size_eraseinfo);
+
+	if (size_eraseinfo)
+		/* Update the erase info offset and size in kdump sub header */
+		if (!update_eraseinfo_of_sub_header(offset_eraseinfo,
+						    size_eraseinfo))
+			return FALSE;
+
+	return TRUE;
 }
 
 int
@@ -6267,7 +4921,7 @@ close_files_for_creating_dumpfile(void)
 		close_kernel_file();
 
 	/* free name for vmcoreinfo */
-	if (info->offset_vmcoreinfo && info->size_vmcoreinfo) {
+	if (has_vmcoreinfo()) {
 		free(info->name_vmcoreinfo);
 		info->name_vmcoreinfo = NULL;
 	}
@@ -6333,15 +4987,16 @@ get_structure_info_xen(void)
 int
 get_xen_phys_start(void)
 {
-	off_t offset;
-	unsigned long xen_phys_start;
+	off_t offset, offset_xen_crash_info;
+	unsigned long xen_phys_start, size_xen_crash_info;
 	const off_t failed = (off_t)-1;
 
 	if (info->xen_phys_start)
 		return TRUE;
 
-	if (info->size_xen_crash_info >= SIZE_XEN_CRASH_INFO_V2) {
-		offset = info->offset_xen_crash_info + info->size_xen_crash_info
+	get_xen_crash_info(&offset_xen_crash_info, &size_xen_crash_info);
+	if (size_xen_crash_info >= SIZE_XEN_CRASH_INFO_V2) {
+		offset = offset_xen_crash_info + size_xen_crash_info
 			 - sizeof(unsigned long) * 2;
 		if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
 			ERRMSG("Can't seek the dump memory(%s). %s\n",
@@ -6541,8 +5196,8 @@ generate_vmcoreinfo_xen(void)
 		ERRMSG("Can't get the size of page.\n");
 		return FALSE;
 	}
-	dwarf_info.fd_debuginfo   = info->fd_xen_syms;
-	dwarf_info.name_debuginfo = info->name_xen_syms;
+	set_dwarf_debuginfo("xen-syms", NULL,
+			    info->name_xen_syms, info->fd_xen_syms);
 
 	if (!get_symbol_info_xen())
 		return FALSE;
@@ -6707,10 +5362,11 @@ exclude_xen_user_domain(void)
 {
 	int i;
 	unsigned int count_info, _domain;
+	unsigned int num_pt_loads = get_num_pt_loads();
 	unsigned long page_info_addr;
+	unsigned long long phys_start, phys_end;
 	unsigned long long pfn, pfn_end;
 	unsigned long long j, size;
-	struct pt_load_segment *pls;
 	struct timeval tv_start;
 
 	gettimeofday(&tv_start, NULL);
@@ -6718,18 +5374,17 @@ exclude_xen_user_domain(void)
 	/*
 	 * NOTE: the first half of bitmap is not used for Xen extraction
 	 */
-	for (i = 0; i < info->num_load_memory; i++) {
+	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 
-		print_progress(PROGRESS_XEN_DOMAIN, i, info->num_load_memory);
+		print_progress(PROGRESS_XEN_DOMAIN, i, num_pt_loads);
 
-		pls = &info->pt_load_segments[i];
-		pfn     = paddr_to_pfn(pls->phys_start);
-		pfn_end = paddr_to_pfn(pls->phys_end);
+		pfn     = paddr_to_pfn(phys_start);
+		pfn_end = paddr_to_pfn(phys_end);
 		size    = pfn_end - pfn;
 
 		for (j = 0; pfn < pfn_end; pfn++, j++) {
 			print_progress(PROGRESS_XEN_DOMAIN, j + (size * i),
-					size * info->num_load_memory);
+					size * num_pt_loads);
 
 			if (!allocated_in_map(pfn)) {
 				clear_bit_on_2nd_bitmap(pfn);
@@ -6768,7 +5423,7 @@ exclude_xen_user_domain(void)
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_XEN_DOMAIN, info->num_load_memory, info->num_load_memory);
+	print_progress(PROGRESS_XEN_DOMAIN, num_pt_loads, num_pt_loads);
 	print_execution_time(PROGRESS_XEN_DOMAIN, &tv_start);
 
 	return TRUE;
@@ -6777,6 +5432,9 @@ exclude_xen_user_domain(void)
 int
 initial_xen(void)
 {
+	off_t offset;
+	unsigned long size;
+
 #ifdef __powerpc__
 	MSG("\n");
 	MSG("ppc64 xen is not supported.\n");
@@ -6809,8 +5467,8 @@ initial_xen(void)
 	 * Get the debug information for analysis from the xen-syms file
 	 */
 	} else if (info->name_xen_syms) {
-		dwarf_info.fd_debuginfo   = info->fd_xen_syms;
-		dwarf_info.name_debuginfo = info->name_xen_syms;
+		set_dwarf_debuginfo("xen-syms", NULL,
+				    info->name_xen_syms, info->fd_xen_syms);
 
 		if (!get_symbol_info_xen())
 			return FALSE;
@@ -6824,7 +5482,7 @@ initial_xen(void)
 		 * Check whether /proc/vmcore contains vmcoreinfo,
 		 * and get both the offset and the size.
 		 */
-		if (!info->offset_vmcoreinfo_xen || !info->size_vmcoreinfo_xen){
+		if (!has_vmcoreinfo_xen()){
 			if (!info->flag_exclude_xen_dom)
 				goto out;
 
@@ -6838,8 +5496,8 @@ initial_xen(void)
 		/*
 		 * Get the debug information from /proc/vmcore
 		 */
-		if (!read_vmcoreinfo_from_vmcore(info->offset_vmcoreinfo_xen,
-		    info->size_vmcoreinfo_xen, TRUE))
+		get_vmcoreinfo_xen(&offset, &size);
+		if (!read_vmcoreinfo_from_vmcore(offset, size, TRUE))
 			return FALSE;
 	}
 	if (!get_xen_phys_start())
@@ -6940,10 +5598,14 @@ writeout_dumpfile(void)
 			goto out;
 		if (!write_elf_pages(&cd_header, &cd_page))
 			goto out;
+		if (!write_elf_eraseinfo(&cd_header))
+			goto out;
 	} else {
 		if (!write_kdump_header())
 			goto out;
 		if (!write_kdump_pages(&cd_header, &cd_page))
+			goto out;
+		if (!write_kdump_eraseinfo(&cd_page))
 			goto out;
 		if (!write_kdump_bitmap())
 			goto out;
@@ -7095,10 +5757,10 @@ create_dumpfile(void)
 		return FALSE;
 
 	if (!info->flag_refiltering) {
-		if (!get_elf_info())
+		if (!get_elf_info(info->fd_memory, info->name_memory))
 			return FALSE;
 	}
-	if (vt.mem_flags & MEMORY_XEN) {
+	if (is_xen_memory()) {
 		if (!initial_xen())
 			return FALSE;
 	}
@@ -7120,6 +5782,9 @@ retry:
 				info->kh_memory->dump_level);
 		}
 	}
+
+	if (info->name_filterconfig && !gather_filter_info())
+		return FALSE;
 
 	if (!create_dump_bitmap())
 		return FALSE;
@@ -7147,6 +5812,7 @@ retry:
 	}
 	print_report();
 
+	clear_filter_info();
 	if (!close_files_for_creating_dumpfile())
 		return FALSE;
 
@@ -7268,6 +5934,8 @@ store_splitting_info(void)
 		}
 		SPLITTING_START_PFN(i) = kh.start_pfn;
 		SPLITTING_END_PFN(i)   = kh.end_pfn;
+		SPLITTING_OFFSET_EI(i) = kh.offset_eraseinfo;
+		SPLITTING_SIZE_EI(i)   = kh.size_eraseinfo;
 	}
 	return TRUE;
 }
@@ -7352,17 +6020,53 @@ get_splitting_info(void)
 	if (!check_splitting_info())
 		return FALSE;
 
+	if (!get_kdump_compressed_header_info(SPLITTING_DUMPFILE(0)))
+		return FALSE;
+
 	return TRUE;
+}
+
+int
+copy_same_data(int src_fd, int dst_fd, off_t offset, unsigned long size)
+{
+	int ret = FALSE;
+	char *buf = NULL;
+
+	if ((buf = malloc(size)) == NULL) {
+		ERRMSG("Can't allcate memory.\n");
+		return FALSE;
+	}
+	if (lseek(src_fd, offset, SEEK_SET) < 0) {
+		ERRMSG("Can't seek a source file. %s\n", strerror(errno));
+		goto out;
+	}
+	if (read(src_fd, buf, size) != size) {
+		ERRMSG("Can't read a source file. %s\n", strerror(errno));
+		goto out;
+	}
+	if (lseek(dst_fd, offset, SEEK_SET) < 0) {
+		ERRMSG("Can't seek a destination file. %s\n", strerror(errno));
+		goto out;
+	}
+	if (write(dst_fd, buf, size) != size) {
+		ERRMSG("Can't write a destination file. %s\n", strerror(errno));
+		goto out;
+	}
+	ret = TRUE;
+out:
+	free(buf);
+	return ret;
 }
 
 int
 reassemble_kdump_header(void)
 {
-	int fd, ret = FALSE;
-	off_t offset_bitmap;
+	int fd = -1, ret = FALSE;
+	off_t offset;
+	unsigned long size;
 	struct disk_dump_header dh;
 	struct kdump_sub_header kh;
-	char *buf_bitmap;
+	char *buf_bitmap = NULL;
 
 	/*
 	 * Write common header.
@@ -7401,25 +6105,40 @@ reassemble_kdump_header(void)
 		    info->name_dumpfile, strerror(errno));
 		return FALSE;
 	}
-
-	/*
-	 * Write dump bitmap to both a dumpfile and a bitmap file.
-	 */
-	offset_bitmap
-	    = (DISKDUMP_HEADER_BLOCKS + dh.sub_hdr_size) * dh.block_size;
-	info->len_bitmap = dh.bitmap_blocks * dh.block_size;
-	if ((buf_bitmap = malloc(info->len_bitmap)) == NULL) {
-		ERRMSG("Can't allcate memory for bitmap.\n");
-		return FALSE;
-	}
+	memcpy(&info->sub_header, &kh, sizeof(kh));
 
 	if ((fd = open(SPLITTING_DUMPFILE(0), O_RDONLY)) < 0) {
 		ERRMSG("Can't open a file(%s). %s\n",
 		    SPLITTING_DUMPFILE(0), strerror(errno));
-		free(buf_bitmap);
 		return FALSE;
 	}
-	if (lseek(fd, offset_bitmap, SEEK_SET) < 0) {
+	if (has_pt_note()) {
+		get_pt_note(&offset, &size);
+		if (!copy_same_data(fd, info->fd_dumpfile, offset, size)) {
+			ERRMSG("Can't copy pt_note data to %s.\n",
+			    info->name_dumpfile);
+			goto out;
+		}
+	}
+	if (has_vmcoreinfo()) {
+		get_vmcoreinfo(&offset, &size);
+		if (!copy_same_data(fd, info->fd_dumpfile, offset, size)) {
+			ERRMSG("Can't copy vmcoreinfo data to %s.\n",
+			    info->name_dumpfile);
+			goto out;
+		}
+	}
+
+	/*
+	 * Write dump bitmap to both a dumpfile and a bitmap file.
+	 */
+	offset = (DISKDUMP_HEADER_BLOCKS + dh.sub_hdr_size) * dh.block_size;
+	info->len_bitmap = dh.bitmap_blocks * dh.block_size;
+	if ((buf_bitmap = malloc(info->len_bitmap)) == NULL) {
+		ERRMSG("Can't allcate memory for bitmap.\n");
+		goto out;
+	}
+	if (lseek(fd, offset, SEEK_SET) < 0) {
 		ERRMSG("Can't seek a file(%s). %s\n",
 		    SPLITTING_DUMPFILE(0), strerror(errno));
 		goto out;
@@ -7430,7 +6149,7 @@ reassemble_kdump_header(void)
 		goto out;
 	}
 
-	if (lseek(info->fd_dumpfile, offset_bitmap, SEEK_SET) < 0) {
+	if (lseek(info->fd_dumpfile, offset, SEEK_SET) < 0) {
 		ERRMSG("Can't seek a file(%s). %s\n",
 		    info->name_dumpfile, strerror(errno));
 		goto out;
@@ -7456,7 +6175,9 @@ reassemble_kdump_header(void)
 
 	ret = TRUE;
 out:
-	close(fd);
+	if (fd > 0)
+		close(fd);
+	free(buf_bitmap);
 
 	return ret;
 }
@@ -7465,16 +6186,18 @@ int
 reassemble_kdump_pages(void)
 {
 	int i, fd = 0, ret = FALSE;
-	off_t offset_first_ph, offset_ph_org;
+	off_t offset_first_ph, offset_ph_org, offset_eraseinfo;
 	off_t offset_data_new, offset_zero_page = 0;
 	unsigned long long pfn, start_pfn, end_pfn;
 	unsigned long long num_dumpable, num_dumped;
+	unsigned long size_eraseinfo;
 	struct dump_bitmap bitmap2;
 	struct disk_dump_header dh;
 	struct page_desc pd, pd_zero;
 	struct cache_data cd_pd, cd_data;
 	struct timeval tv_start;
 	char *data = NULL;
+	unsigned long data_buf_size = info->page_size;
 
 	initialize_2nd_bitmap(&bitmap2);
 
@@ -7488,7 +6211,7 @@ reassemble_kdump_pages(void)
 		free_cache_data(&cd_pd);
 		return FALSE;
 	}
-	if ((data = malloc(info->page_size)) == NULL) {
+	if ((data = malloc(data_buf_size)) == NULL) {
 		ERRMSG("Can't allcate memory for page data.\n");
 		free_cache_data(&cd_pd);
 		free_cache_data(&cd_data);
@@ -7593,6 +6316,52 @@ reassemble_kdump_pages(void)
 	if (!write_cache_bufsz(&cd_data))
 		goto out;
 
+	offset_eraseinfo = cd_data.offset;
+	size_eraseinfo   = 0;
+	/* Copy eraseinfo from split dumpfiles to o/p dumpfile */
+	for (i = 0; i < info->num_dumpfile; i++) {
+		if (!SPLITTING_SIZE_EI(i))
+			continue;
+
+		if (SPLITTING_SIZE_EI(i) > data_buf_size) {
+			data_buf_size = SPLITTING_SIZE_EI(i);
+			if ((data = realloc(data, data_buf_size)) == NULL) {
+				ERRMSG("Can't allcate memory for eraseinfo"
+					" data.\n");
+				goto out;
+			}
+		}
+		if ((fd = open(SPLITTING_DUMPFILE(i), O_RDONLY)) < 0) {
+			ERRMSG("Can't open a file(%s). %s\n",
+			    SPLITTING_DUMPFILE(i), strerror(errno));
+			goto out;
+		}
+		if (lseek(fd, SPLITTING_OFFSET_EI(i), SEEK_SET) < 0) {
+			ERRMSG("Can't seek a file(%s). %s\n",
+			    SPLITTING_DUMPFILE(i), strerror(errno));
+			goto out;
+		}
+		if (read(fd, data, SPLITTING_SIZE_EI(i)) !=
+						SPLITTING_SIZE_EI(i)) {
+			ERRMSG("Can't read a file(%s). %s\n",
+			    SPLITTING_DUMPFILE(i), strerror(errno));
+			goto out;
+		}
+		if (!write_cache(&cd_data, data, SPLITTING_SIZE_EI(i)))
+			goto out;
+		size_eraseinfo += SPLITTING_SIZE_EI(i);
+
+		close(fd);
+		fd = 0;
+	}
+	if (size_eraseinfo) {
+		if (!write_cache_bufsz(&cd_data))
+			goto out;
+
+		if (!update_eraseinfo_of_sub_header(offset_eraseinfo,
+						    size_eraseinfo))
+			goto out;
+	}
 	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 
@@ -7728,6 +6497,9 @@ check_param_for_creating_dumpfile(int argc, char *argv[])
 	if (info->flag_flatten && info->flag_split)
 		return FALSE;
 
+	if (info->name_filterconfig && !info->name_vmlinux)
+		return FALSE;
+
 	if ((argc == optind + 2) && !info->flag_flatten
 				 && !info->flag_split) {
 		/*
@@ -7820,6 +6592,7 @@ static struct option longopts[] = {
 	{"message-level", required_argument, NULL, 'm'},
 	{"vtop", required_argument, NULL, 'V'},
 	{"dump-dmesg", no_argument, NULL, 'M'}, 
+	{"config", required_argument, NULL, 'C'},
 	{"help", no_argument, NULL, 'h'},
 	{0, 0, 0, 0}
 };
@@ -7844,11 +6617,14 @@ main(int argc, char *argv[])
 
 	info->block_order = DEFAULT_ORDER;
 	message_level = DEFAULT_MSG_LEVEL;
-	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:MRrsVvXx:", longopts,
+	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:MRrsvXx:", longopts,
 	    NULL)) != -1) {
 		switch (opt) {
 		case 'b':
 			info->block_order = atoi(optarg);
+			break;
+		case 'C':
+			info->name_filterconfig = optarg;
 			break;
 		case 'c':
 			info->flag_compress = 1;
@@ -7865,6 +6641,11 @@ main(int argc, char *argv[])
 			break;
 		case 'F':
 			info->flag_flatten = 1;
+			/*
+			 * All messages are output to STDERR because STDOUT is
+			 * used for outputting dump data.
+			 */
+			flag_strerr_message = TRUE;
 			break;
 		case 'f':
 			info->flag_force = 1;
@@ -8049,8 +6830,6 @@ out:
 			close(info->fd_dumpfile);
 		if (info->fd_bitmap)
 			close(info->fd_bitmap);
-		if (info->pt_load_segments != NULL)
-			free(info->pt_load_segments);
 		if (vt.node_online_map != NULL)
 			free(vt.node_online_map);
 		if (info->mem_map_data != NULL)
@@ -8063,5 +6842,7 @@ out:
 			free(info->p2m_mfn_frame_list);
 		free(info);
 	}
+	free_elf_info();
+
 	return retcd;
 }
