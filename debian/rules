@@ -3,6 +3,9 @@
 %:
 	dh $@
 
+override_dh_auto_build:
+	dh_auto_build -- LINKTYPE=dynamic
+
 override_dh_installinit:
 	# Start right after syslog is available, and don't bother stopping
 	# (which just unloads the kdump kernel) so that we can catch crashes

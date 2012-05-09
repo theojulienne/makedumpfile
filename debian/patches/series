@@ -1,3 +1,2 @@
-0001-Dynamically-link-makedumpfile.patch
-0002-Remove-needless-linking.patch
-0003-Use-install-instead-of-cp-in-Makefile.patch
+0001-Remove-libebl-linkage.patch
+0002-Use-install-instead-of-cp-in-Makefile.patch
