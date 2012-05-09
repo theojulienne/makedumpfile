@@ -1,7 +1,7 @@
 /*
  * makedumpfile.h
  *
- * Copyright (C) 2006, 2007, 2008, 2009  NEC Corporation
+ * Copyright (C) 2006, 2007, 2008, 2009, 2011  NEC Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -34,6 +34,7 @@
 #include "common.h"
 #include "dwarf_info.h"
 #include "diskdump_mod.h"
+#include "sadump_mod.h"
 
 /*
  * Result of command
@@ -54,6 +55,8 @@ enum {
 	DISCONTIGMEM,
 	FLATMEM
 };
+
+int get_mem_type(void);
 
 /*
  * Page flags
@@ -178,6 +181,7 @@ isAnon(unsigned long mapping)
 #define STRNEQ(A, B)	(A && B && \
 	(strncmp((char *)(A), (char *)(B), strlen((char *)(B))) == 0))
 
+#define USHORT(ADDR)	*((unsigned short *)(ADDR))
 #define UINT(ADDR)	*((unsigned int *)(ADDR))
 #define ULONG(ADDR)	*((unsigned long *)(ADDR))
 
@@ -376,7 +380,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(2, 6, 36)/* linux-2.6.36 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 2, 0)/* linux-3.2.0 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -517,7 +521,7 @@ do { \
 
 #endif /* x86_64 */
 
-#ifdef __powerpc__
+#ifdef __powerpc64__
 #define __PAGE_OFFSET		(0xc000000000000000)
 #define KERNELBASE		PAGE_OFFSET
 #define VMALLOCBASE     	(0xD000000000000000)
@@ -526,12 +530,24 @@ do { \
 #define _MAX_PHYSMEM_BITS	(44)
 #endif
 
+#ifdef __powerpc32__
+
+#define __PAGE_OFFSET		(0xc0000000)
+#define KERNELBASE		PAGE_OFFSET
+#define VMALL_START     	(info->vmalloc_start)
+#define KVBASE			(SYMBOL(_stext))
+#define _SECTION_SIZE_BITS	(24)
+#define _MAX_PHYSMEM_BITS	(44)
+
+#endif
+
 #ifdef __s390x__
 #define __PAGE_OFFSET		(info->page_size - 1)
 #define KERNELBASE		(0)
 #define KVBASE			KERNELBASE
 #define _SECTION_SIZE_BITS	(28)
-#define _MAX_PHYSMEM_BITS	(42)
+#define _MAX_PHYSMEM_BITS_ORIG          (42)
+#define _MAX_PHYSMEM_BITS_3_3           (46)
 
 /* Bits in the segment/region table address-space-control-element */
 #define _ASCE_TYPE_MASK		0x0c
@@ -654,14 +670,23 @@ unsigned long long vaddr_to_paddr_x86_64(unsigned long vaddr);
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86_64(X)
 #endif /* x86_64 */
 
-#ifdef __powerpc__ /* powerpc */
+#ifdef __powerpc64__ /* powerpc64 */
 int get_machdep_info_ppc64(void);
 unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
 #define get_phys_base()		TRUE
 #define get_machdep_info()	get_machdep_info_ppc64()
 #define get_versiondep_info()	TRUE
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
-#endif          /* powerpc */
+#endif          /* powerpc64 */
+
+#ifdef __powerpc32__ /* powerpc32 */
+int get_machdep_info_ppc(void);
+unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
+#define get_phys_base()		TRUE
+#define get_machdep_info()	get_machdep_info_ppc()
+#define get_versiondep_info()	TRUE
+#define vaddr_to_paddr(X)	vaddr_to_paddr_ppc(X)
+#endif          /* powerpc32 */
 
 #ifdef __s390x__ /* s390x */
 int get_machdep_info_s390x(void);
@@ -894,6 +919,12 @@ struct DumpInfo {
 	 */
 	unsigned long long split_start_pfn;  
 	unsigned long long split_end_pfn;  
+
+	/*
+	 * sadump info:
+	 */
+	int flag_sadump_diskset;
+	enum sadump_format_type flag_sadump;         /* sadump format type */
 };
 extern struct DumpInfo		*info;
 
@@ -951,6 +982,9 @@ struct symbol_table {
 	unsigned long long	log_buf_len;
 	unsigned long long	log_end;
 	unsigned long long	max_pfn;
+	unsigned long long	node_remap_start_vaddr;
+	unsigned long long	node_remap_end_vaddr;
+	unsigned long long	node_remap_start_pfn;
 
 	/*
 	 * for Xen extraction
@@ -974,6 +1008,25 @@ struct symbol_table {
 	 */
 
 	unsigned long long	modules;
+
+	/*
+	 * vmalloc_start address on s390x arch
+	 */
+	unsigned long long	high_memory;
+
+	/*
+	 * for sadump
+	 */
+	unsigned long long	linux_banner;
+	unsigned long long	bios_cpu_apicid;
+	unsigned long long	x86_bios_cpu_apicid;
+	unsigned long long	x86_bios_cpu_apicid_early_ptr;
+	unsigned long long	x86_bios_cpu_apicid_early_map;
+	unsigned long long	crash_notes;
+	unsigned long long	__per_cpu_offset;
+	unsigned long long	__per_cpu_load;
+	unsigned long long	cpu_online_mask;
+	unsigned long long	kexec_crash_image;
 };
 
 struct size_table {
@@ -996,6 +1049,17 @@ struct size_table {
 	 * for loading module symbol data
 	 */
 	long	module;
+
+	/*
+	 * for sadump
+	 */
+	long	percpu_data;
+	long	elf_prstatus;
+	long	user_regs_struct;
+	long	cpumask;
+	long	cpumask_t;
+	long	kexec_segment;
+	long	elf64_hdr;
 };
 
 struct offset_table {
@@ -1064,6 +1128,67 @@ struct offset_table {
 		long	symtab;
 		long	strtab;
 	} module;
+
+	/*
+	 * for loading elf_prstaus symbol data
+	 */
+	struct elf_prstatus_s {
+		long	pr_reg;
+	} elf_prstatus;
+
+	/*
+	 * for loading user_regs_struct symbol data
+	 */
+	struct user_regs_struct_s {
+		long	r15;
+		long	r14;
+		long	r13;
+		long	r12;
+		long	bp;
+		long	bx;
+		long	r11;
+		long	r10;
+		long	r9;
+		long	r8;
+		long	ax;
+		long	cx;
+		long	dx;
+		long	si;
+		long	di;
+		long	orig_ax;
+		long	ip;
+		long	cs;
+		long	flags;
+		long	sp;
+		long	ss;
+		long	fs_base;
+		long	gs_base;
+		long	ds;
+		long	es;
+		long	fs;
+		long	gs;
+	} user_regs_struct;
+
+	struct kimage_s {
+		long	segment;
+	} kimage;
+
+	struct kexec_segment_s {
+		long	mem;
+	} kexec_segment;
+
+	struct elf64_hdr_s {
+		long	e_phnum;
+		long	e_phentsize;
+		long	e_phoff;
+	} elf64_hdr;
+
+	struct elf64_phdr_s {
+		long	p_type;
+		long	p_offset;
+		long	p_paddr;
+		long	p_memsz;
+	} elf64_phdr;
 };
 
 /*
@@ -1077,6 +1202,8 @@ struct array_table {
 	long	pgdat_list;
 	long	mem_section;
 	long	node_memblk;
+	long	__per_cpu_offset;
+	long	node_remap_start_pfn;
 
 	/*
 	 * Structure
@@ -1087,6 +1214,9 @@ struct array_table {
 	struct free_area_at {
 		long	free_list;
 	} free_area;
+	struct kimage_at {
+		long	segment;
+	} kimage;
 };
 
 struct number_table {
@@ -1178,11 +1308,11 @@ int get_xen_info_x86(void);
 #define XEN_VIRT_START        (0xffff828c80000000)
 
 #define is_xen_vaddr(x) \
-        ((x) >= HYPERVISOR_VIRT_START && (x) < HYPERVISOR_VIRT_END)
+	((x) >= HYPERVISOR_VIRT_START && (x) < HYPERVISOR_VIRT_END)
 #define is_direct(x) \
-        ((x) >= DIRECTMAP_VIRT_START && (x) < DIRECTMAP_VIRT_END)
+	((x) >= DIRECTMAP_VIRT_START && (x) < DIRECTMAP_VIRT_END)
 #define is_xen_text(x) \
-        ((x) >= XEN_VIRT_START && (x) < DIRECTMAP_VIRT_START)
+	((x) >= XEN_VIRT_START && (x) < DIRECTMAP_VIRT_START)
 
 unsigned long long kvtop_xen_x86_64(unsigned long kvaddr);
 #define kvtop_xen(X)	kvtop_xen_x86_64(X)
@@ -1227,14 +1357,121 @@ int get_xen_info_ia64(void);
 
 #endif	/* __ia64 */
 
-#ifdef __powerpc__ /* powerpc */
+#if defined(__powerpc64__) || defined(__powerpc32__) /* powerpcXX */
 #define kvtop_xen(X)	FALSE
 #define get_xen_info_arch(X) FALSE
-#endif	/* powerpc */
+#endif	/* powerpcXX */
 
 #ifdef __s390x__ /* s390x */
 #define kvtop_xen(X)	FALSE
 #define get_xen_info_arch(X) FALSE
 #endif	/* s390x */
+
+static inline int
+is_on(char *bitmap, int i)
+{
+	return bitmap[i>>3] & (1 << (i & 7));
+}
+
+static inline int
+is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
+{
+	off_t offset;
+	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
+		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
+		lseek(bitmap->fd, offset, SEEK_SET);
+		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		if (pfn == 0)
+			bitmap->no_block = 0;
+		else
+			bitmap->no_block = pfn/PFN_BUFBITMAP;
+	}
+	return is_on(bitmap->buf, pfn%PFN_BUFBITMAP);
+}
+
+static inline int
+is_zero_page(unsigned char *buf, long page_size)
+{
+	size_t i;
+
+	for (i = 0; i < page_size; i++)
+		if (buf[i])
+			return FALSE;
+	return TRUE;
+}
+
+void write_vmcoreinfo_data(void);
+int set_bit_on_1st_bitmap(unsigned long long pfn);
+int clear_bit_on_1st_bitmap(unsigned long long pfn);
+
+#ifdef __x86__
+
+struct user_regs_struct {
+	unsigned long bx;
+	unsigned long cx;
+	unsigned long dx;
+	unsigned long si;
+	unsigned long di;
+	unsigned long bp;
+	unsigned long ax;
+	unsigned long ds;
+	unsigned long es;
+	unsigned long fs;
+	unsigned long gs;
+	unsigned long orig_ax;
+	unsigned long ip;
+	unsigned long cs;
+	unsigned long flags;
+	unsigned long sp;
+	unsigned long ss;
+};
+
+struct elf_prstatus {
+	char pad1[72];
+	struct user_regs_struct pr_reg;
+	char pad2[4];
+};
+
+#endif
+
+#ifdef __x86_64__
+
+struct user_regs_struct {
+	unsigned long r15;
+	unsigned long r14;
+	unsigned long r13;
+	unsigned long r12;
+	unsigned long bp;
+	unsigned long bx;
+	unsigned long r11;
+	unsigned long r10;
+	unsigned long r9;
+	unsigned long r8;
+	unsigned long ax;
+	unsigned long cx;
+	unsigned long dx;
+	unsigned long si;
+	unsigned long di;
+	unsigned long orig_ax;
+	unsigned long ip;
+	unsigned long cs;
+	unsigned long flags;
+	unsigned long sp;
+	unsigned long ss;
+	unsigned long fs_base;
+	unsigned long gs_base;
+	unsigned long ds;
+	unsigned long es;
+	unsigned long fs;
+	unsigned long gs;
+};
+
+struct elf_prstatus {
+	char pad1[112];
+	struct user_regs_struct pr_reg;
+	char pad2[4];
+};
+
+#endif
 
 #endif /* MAKEDUMPFILE_H */

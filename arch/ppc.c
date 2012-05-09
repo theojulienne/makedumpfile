@@ -1,8 +1,9 @@
 /*
- * ppc64.c
+ * ppc.c
  *
- * Created by: Sachin Sant (sachinp@in.ibm.com)
- * Copyright (C) IBM Corporation, 2006. All rights reserved
+ * Created by: Suzuki K. Poulose <suzuki@in.ibm.com>
+ *  - Based on ppc64 implementation
+ * Copyright (C) IBM Corporation, 2012. All rights reserved
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,14 +19,14 @@
  * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#ifdef __powerpc64__
+#ifdef __powerpc32__
 
 #include "../print_info.h"
 #include "../elf_info.h"
 #include "../makedumpfile.h"
 
 int
-get_machdep_info_ppc64(void)
+get_machdep_info_ppc(void)
 {
 	unsigned long vmlist, vmalloc_start;
 
@@ -33,11 +34,13 @@ get_machdep_info_ppc64(void)
 	info->max_physmem_bits  = _MAX_PHYSMEM_BITS;
 	info->page_offset = __PAGE_OFFSET;
 
-	if (SYMBOL(_stext) == NOT_FOUND_SYMBOL) {
+	if (SYMBOL(_stext) != NOT_FOUND_SYMBOL)
+		info->kernel_start = SYMBOL(_stext);
+	else {
 		ERRMSG("Can't get the symbol of _stext.\n");
 		return FALSE;
 	}
-	info->kernel_start = SYMBOL(_stext);
+		
 	DEBUG_MSG("kernel_start : %lx\n", info->kernel_start);
 
 	/*
@@ -64,14 +67,16 @@ get_machdep_info_ppc64(void)
 }
 
 int
-is_vmalloc_addr_ppc64(unsigned long vaddr)
+is_vmalloc_addr_ppc(unsigned long vaddr)
 {
 	return (info->vmalloc_start && vaddr >= info->vmalloc_start);
 }
 
 unsigned long long
-vaddr_to_paddr_ppc64(unsigned long vaddr)
+vaddr_to_paddr_ppc(unsigned long vaddr)
 {
+	unsigned long *pgd, *pmd;
+	unsigned long long pte;
 	unsigned long long paddr;
 
 	paddr = vaddr_to_paddr_general(vaddr);
@@ -83,7 +88,7 @@ vaddr_to_paddr_ppc64(unsigned long vaddr)
 		ERRMSG("Can't get necessary information for vmalloc translation.\n");
 		return NOT_PADDR;
 	}
-	if (!is_vmalloc_addr_ppc64(vaddr))
+	if (!is_vmalloc_addr_ppc(vaddr))
 		return (vaddr - info->kernel_start);
 
 	/*
@@ -93,4 +98,4 @@ vaddr_to_paddr_ppc64(unsigned long vaddr)
 	return NOT_PADDR;
 }
 
-#endif /* powerpc64 */
+#endif /* powerpc32 */

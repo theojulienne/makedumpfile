@@ -60,9 +60,31 @@
 #define pte_offset(x)		(pte_index(x) * sizeof(unsigned long))
 
 int
+set_s390x_max_physmem_bits(void)
+{
+	long array_len = ARRAY_LENGTH(mem_section);
+	/*
+	 * The older s390x kernels uses _MAX_PHYSMEM_BITS as 42 and the
+	 * newer kernels uses 46 bits.
+	 */
+
+	info->max_physmem_bits  = _MAX_PHYSMEM_BITS_ORIG ;
+	if ((array_len == (NR_MEM_SECTIONS() / _SECTIONS_PER_ROOT_EXTREME()))
+		|| (array_len == (NR_MEM_SECTIONS() / _SECTIONS_PER_ROOT())))
+		return TRUE;
+
+	info->max_physmem_bits  = _MAX_PHYSMEM_BITS_3_3;
+	if ((array_len == (NR_MEM_SECTIONS() / _SECTIONS_PER_ROOT_EXTREME()))
+		|| (array_len == (NR_MEM_SECTIONS() / _SECTIONS_PER_ROOT())))
+		return TRUE;
+
+	return FALSE;
+}
+
+int
 get_machdep_info_s390x(void)
 {
-	unsigned long vmlist, vmalloc_start;
+	unsigned long vmalloc_start;
 	char *term_str = getenv("TERM");
 
 	if (term_str && strcmp(term_str, "dumb") == 0)
@@ -70,7 +92,10 @@ get_machdep_info_s390x(void)
 		flag_ignore_r_char = 1;
 
 	info->section_size_bits = _SECTION_SIZE_BITS;
-	info->max_physmem_bits  = _MAX_PHYSMEM_BITS;
+	if (!set_s390x_max_physmem_bits()) {
+		ERRMSG("Can't detect max_physmem_bits.\n");
+		return FALSE;
+	}
 	info->page_offset = __PAGE_OFFSET;
 
 	if (SYMBOL(_stext) == NOT_FOUND_SYMBOL) {
@@ -81,19 +106,13 @@ get_machdep_info_s390x(void)
 	DEBUG_MSG("kernel_start : %lx\n", info->kernel_start);
 
 	/*
-	 * For the compatibility, makedumpfile should run without the symbol
-	 * vmlist and the offset of vm_struct.addr if they are not necessary.
+	 * Obtain the vmalloc_start address from high_memory symbol.
 	 */
-	if ((SYMBOL(vmlist) == NOT_FOUND_SYMBOL)
-	    || (OFFSET(vm_struct.addr) == NOT_FOUND_STRUCTURE)) {
+	if (SYMBOL(high_memory) == NOT_FOUND_SYMBOL) {
 		return TRUE;
 	}
-	if (!readmem(VADDR, SYMBOL(vmlist), &vmlist, sizeof(vmlist))) {
-		ERRMSG("Can't get vmlist.\n");
-		return FALSE;
-	}
-	if (!readmem(VADDR, vmlist + OFFSET(vm_struct.addr), &vmalloc_start,
-	    sizeof(vmalloc_start))) {
+	if (!readmem(VADDR, SYMBOL(high_memory), &vmalloc_start,
+			sizeof(vmalloc_start))) {
 		ERRMSG("Can't get vmalloc_start.\n");
 		return FALSE;
 	}
@@ -265,8 +284,7 @@ vaddr_to_paddr_s390x(unsigned long vaddr)
 	if (paddr != NOT_PADDR)
 		return paddr;
 
-	if ((SYMBOL(vmlist) == NOT_FOUND_SYMBOL)
-	    || (OFFSET(vm_struct.addr) == NOT_FOUND_STRUCTURE)) {
+	if (SYMBOL(high_memory) == NOT_FOUND_SYMBOL) {
 		ERRMSG("Can't get necessary information for vmalloc "
 			"translation.\n");
 		return NOT_PADDR;

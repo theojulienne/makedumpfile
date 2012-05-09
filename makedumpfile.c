@@ -1,7 +1,7 @@
 /*
  * makedumpfile.c
  *
- * Copyright (C) 2006, 2007, 2008, 2009  NEC Corporation
+ * Copyright (C) 2006, 2007, 2008, 2009, 2011  NEC Corporation
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -18,6 +18,8 @@
 #include "dwarf_info.h"
 #include "elf_info.h"
 #include "erase_info.h"
+#include "sadump_info.h"
+#include <stddef.h>
 #include <sys/time.h>
 
 struct symbol_table	symbol_table;
@@ -118,6 +120,12 @@ get_max_mapnr(void)
 		info->max_mapnr = info->dh_memory->max_mapnr;
 		return TRUE;
 	}
+
+	if (info->flag_sadump) {
+		info->max_mapnr = sadump_get_max_mapnr();
+		return TRUE;
+	}
+
 	max_paddr = get_max_paddr();
 	info->max_mapnr = paddr_to_pfn(max_paddr);
 
@@ -313,7 +321,7 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 		break;
 	case MADDR_XEN:
 		paddr = addr;
-  		break;
+		break;
 	default:
 		ERRMSG("Invalid address type (%d).\n", type_addr);
 		goto error;
@@ -337,6 +345,9 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 
 	if (info->flag_refiltering)
 		return readpmem_kdump_compressed(paddr, bufptr, read_size);
+
+	if (info->flag_sadump)
+		return readpmem_sadump(paddr, bufptr, read_size);
 
 	if (!(offset = paddr_to_offset(paddr))) {
 		ERRMSG("Can't convert a physical address(%llx) to offset.\n",
@@ -385,7 +396,7 @@ get_kernel_version(char *release)
 	start = end + 1;
 	rel = strtol(start, &end, 10);
 	if (rel == LONG_MAX)
-  		return FALSE;
+		return FALSE;
 
 	version = KERNEL_VERSION(maj, min, rel);
 
@@ -627,11 +638,16 @@ open_dump_memory(void)
 	if (status == TRUE) {
 		info->flag_refiltering = TRUE;
 		return get_kdump_compressed_header_info(info->name_memory);
-	} else if (status == FALSE) {
-		return TRUE;
-	} else {
-		return FALSE;
 	}
+
+	status = check_and_get_sadump_header_info(info->name_memory);
+	if (status == TRUE)
+		return TRUE;
+
+	if (status == ERROR)
+		return TRUE;
+
+	return FALSE;
 }
 
 int
@@ -797,6 +813,27 @@ get_symbol_info(void)
 	SYMBOL_INIT(log_end, "log_end");
 	SYMBOL_INIT(max_pfn, "max_pfn");
 	SYMBOL_INIT(modules, "modules");
+	SYMBOL_INIT(high_memory, "high_memory");
+	SYMBOL_INIT(linux_banner, "linux_banner");
+	SYMBOL_INIT(bios_cpu_apicid, "bios_cpu_apicid");
+	SYMBOL_INIT(x86_bios_cpu_apicid, "x86_bios_cpu_apicid");
+	if (SYMBOL(x86_bios_cpu_apicid) == NOT_FOUND_SYMBOL)
+		SYMBOL_INIT(x86_bios_cpu_apicid,
+			    "per_cpu__x86_bios_cpu_apicid");
+	SYMBOL_INIT(x86_bios_cpu_apicid_early_ptr,
+		    "x86_bios_cpu_apicid_early_ptr");
+	SYMBOL_INIT(x86_bios_cpu_apicid_early_map,
+		    "x86_bios_cpu_apicid_early_map");
+	SYMBOL_INIT(crash_notes, "crash_notes");
+	SYMBOL_INIT(__per_cpu_load, "__per_cpu_load");
+	SYMBOL_INIT(__per_cpu_offset, "__per_cpu_offset");
+	SYMBOL_INIT(cpu_online_mask, "cpu_online_mask");
+	if (SYMBOL(cpu_online_mask) == NOT_FOUND_SYMBOL)
+		SYMBOL_INIT(cpu_online_mask, "cpu_online_map");
+	SYMBOL_INIT(kexec_crash_image, "kexec_crash_image");
+	SYMBOL_INIT(node_remap_start_vaddr, "node_remap_start_vaddr");
+	SYMBOL_INIT(node_remap_end_vaddr, "node_remap_end_vaddr");
+	SYMBOL_INIT(node_remap_start_pfn, "node_remap_start_pfn");
 
 	if (SYMBOL(node_data) != NOT_FOUND_SYMBOL)
 		SYMBOL_ARRAY_TYPE_INIT(node_data, "node_data");
@@ -806,6 +843,11 @@ get_symbol_info(void)
 		SYMBOL_ARRAY_LENGTH_INIT(mem_section, "mem_section");
 	if (SYMBOL(node_memblk) != NOT_FOUND_SYMBOL)
 		SYMBOL_ARRAY_LENGTH_INIT(node_memblk, "node_memblk");
+	if (SYMBOL(__per_cpu_offset) != NOT_FOUND_SYMBOL)
+		SYMBOL_ARRAY_LENGTH_INIT(__per_cpu_offset, "__per_cpu_offset");
+	if (SYMBOL(node_remap_start_pfn) != NOT_FOUND_SYMBOL)
+		SYMBOL_ARRAY_LENGTH_INIT(node_remap_start_pfn,
+					"node_remap_start_pfn");
 
 	return TRUE;
 }
@@ -921,6 +963,182 @@ get_structure_info(void)
 	ENUM_NUMBER_INIT(PG_swapcache, "PG_swapcache");
 
 	TYPEDEF_SIZE_INIT(nodemask_t, "nodemask_t");
+
+	SIZE_INIT(percpu_data, "percpu_data");
+
+	/*
+	 * Get offset of the elf_prstatus members.
+	 */
+	SIZE_INIT(elf_prstatus, "elf_prstatus");
+	OFFSET_INIT(elf_prstatus.pr_reg, "elf_prstatus", "pr_reg");
+
+	/*
+	 * Get size of cpumask and cpumask_t.
+	 */
+	SIZE_INIT(cpumask, "cpumask");
+
+	TYPEDEF_SIZE_INIT(cpumask_t, "cpumask_t");
+
+	/*
+	 * Get offset of the user_regs_struct members.
+	 */
+	SIZE_INIT(user_regs_struct, "user_regs_struct");
+
+#ifdef __x86__
+	if (SIZE(user_regs_struct) != NOT_FOUND_STRUCTURE) {
+		OFFSET_INIT(user_regs_struct.bx, "user_regs_struct", "bx");
+		OFFSET_INIT(user_regs_struct.cx, "user_regs_struct", "cx");
+		OFFSET_INIT(user_regs_struct.dx, "user_regs_struct", "dx");
+		OFFSET_INIT(user_regs_struct.si, "user_regs_struct", "si");
+		OFFSET_INIT(user_regs_struct.di, "user_regs_struct", "di");
+		OFFSET_INIT(user_regs_struct.bp, "user_regs_struct", "bp");
+		OFFSET_INIT(user_regs_struct.ax, "user_regs_struct", "ax");
+		OFFSET_INIT(user_regs_struct.ds, "user_regs_struct", "ds");
+		OFFSET_INIT(user_regs_struct.es, "user_regs_struct", "es");
+		OFFSET_INIT(user_regs_struct.fs, "user_regs_struct", "fs");
+		OFFSET_INIT(user_regs_struct.gs, "user_regs_struct", "gs");
+		OFFSET_INIT(user_regs_struct.orig_ax, "user_regs_struct",
+			    "orig_ax");
+		OFFSET_INIT(user_regs_struct.ip, "user_regs_struct", "ip");
+		OFFSET_INIT(user_regs_struct.cs, "user_regs_struct", "cs");
+		OFFSET_INIT(user_regs_struct.flags, "user_regs_struct",
+			    "flags");
+		OFFSET_INIT(user_regs_struct.sp, "user_regs_struct", "sp");
+		OFFSET_INIT(user_regs_struct.ss, "user_regs_struct", "ss");
+
+		if (OFFSET(user_regs_struct.bx) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.bx, "user_regs_struct", "ebx");
+		if (OFFSET(user_regs_struct.cx) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.cx, "user_regs_struct", "ecx");
+		if (OFFSET(user_regs_struct.dx) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.dx, "user_regs_struct", "edx");
+		if (OFFSET(user_regs_struct.si) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.si, "user_regs_struct", "esi");
+		if (OFFSET(user_regs_struct.di) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.di, "user_regs_struct", "edi");
+		if (OFFSET(user_regs_struct.bp) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.bp, "user_regs_struct", "ebp");
+		if (OFFSET(user_regs_struct.ax) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.ax, "user_regs_struct", "eax");
+		if (OFFSET(user_regs_struct.orig_ax) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.orig_ax, "user_regs_struct", "orig_eax");
+		if (OFFSET(user_regs_struct.ip) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.ip, "user_regs_struct", "eip");
+		if (OFFSET(user_regs_struct.flags) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.flags, "user_regs_struct", "eflags");
+		if (OFFSET(user_regs_struct.sp) == NOT_FOUND_STRUCTURE)
+			OFFSET_INIT(user_regs_struct.sp, "user_regs_struct", "esp");
+	} else {
+		/*
+		 * Note: Sometimes kernel debuginfo doesn't contain
+		 * user_regs_struct structure information. Instead, we
+		 * take offsets from actual datatype.
+		 */
+		OFFSET(user_regs_struct.bx) = offsetof(struct user_regs_struct, bx);
+		OFFSET(user_regs_struct.cx) = offsetof(struct user_regs_struct, cx);
+		OFFSET(user_regs_struct.dx) = offsetof(struct user_regs_struct, dx);
+		OFFSET(user_regs_struct.si) = offsetof(struct user_regs_struct, si);
+		OFFSET(user_regs_struct.di) = offsetof(struct user_regs_struct, di);
+		OFFSET(user_regs_struct.bp) = offsetof(struct user_regs_struct, bp);
+		OFFSET(user_regs_struct.ax) = offsetof(struct user_regs_struct, ax);
+		OFFSET(user_regs_struct.ds) = offsetof(struct user_regs_struct, ds);
+		OFFSET(user_regs_struct.es) = offsetof(struct user_regs_struct, es);
+		OFFSET(user_regs_struct.fs) = offsetof(struct user_regs_struct, fs);
+		OFFSET(user_regs_struct.gs) = offsetof(struct user_regs_struct, gs);
+		OFFSET(user_regs_struct.orig_ax) = offsetof(struct user_regs_struct, orig_ax);
+		OFFSET(user_regs_struct.ip) = offsetof(struct user_regs_struct, ip);
+		OFFSET(user_regs_struct.cs) = offsetof(struct user_regs_struct, cs);
+		OFFSET(user_regs_struct.flags) = offsetof(struct user_regs_struct, flags);
+		OFFSET(user_regs_struct.sp) = offsetof(struct user_regs_struct, sp);
+		OFFSET(user_regs_struct.ss) = offsetof(struct user_regs_struct, ss);
+	}
+#endif /* __x86__ */
+
+#ifdef __x86_64__
+	if (SIZE(user_regs_struct) != NOT_FOUND_STRUCTURE) {
+		OFFSET_INIT(user_regs_struct.r15, "user_regs_struct", "r15");
+		OFFSET_INIT(user_regs_struct.r14, "user_regs_struct", "r14");
+		OFFSET_INIT(user_regs_struct.r13, "user_regs_struct", "r13");
+		OFFSET_INIT(user_regs_struct.r12, "user_regs_struct", "r12");
+		OFFSET_INIT(user_regs_struct.bp, "user_regs_struct", "bp");
+		OFFSET_INIT(user_regs_struct.bx, "user_regs_struct", "bx");
+		OFFSET_INIT(user_regs_struct.r11, "user_regs_struct", "r11");
+		OFFSET_INIT(user_regs_struct.r10, "user_regs_struct", "r10");
+		OFFSET_INIT(user_regs_struct.r9, "user_regs_struct", "r9");
+		OFFSET_INIT(user_regs_struct.r8, "user_regs_struct", "r8");
+		OFFSET_INIT(user_regs_struct.ax, "user_regs_struct", "ax");
+		OFFSET_INIT(user_regs_struct.cx, "user_regs_struct", "cx");
+		OFFSET_INIT(user_regs_struct.dx, "user_regs_struct", "dx");
+		OFFSET_INIT(user_regs_struct.si, "user_regs_struct", "si");
+		OFFSET_INIT(user_regs_struct.di, "user_regs_struct", "di");
+		OFFSET_INIT(user_regs_struct.orig_ax, "user_regs_struct",
+			    "orig_ax");
+		OFFSET_INIT(user_regs_struct.ip, "user_regs_struct", "ip");
+		OFFSET_INIT(user_regs_struct.cs, "user_regs_struct", "cs");
+		OFFSET_INIT(user_regs_struct.flags, "user_regs_struct",
+			    "flags");
+		OFFSET_INIT(user_regs_struct.sp, "user_regs_struct", "sp");
+		OFFSET_INIT(user_regs_struct.ss, "user_regs_struct", "ss");
+		OFFSET_INIT(user_regs_struct.fs_base, "user_regs_struct",
+			    "fs_base");
+		OFFSET_INIT(user_regs_struct.gs_base, "user_regs_struct",
+			    "gs_base");
+		OFFSET_INIT(user_regs_struct.ds, "user_regs_struct", "ds");
+		OFFSET_INIT(user_regs_struct.es, "user_regs_struct", "es");
+		OFFSET_INIT(user_regs_struct.fs, "user_regs_struct", "fs");
+		OFFSET_INIT(user_regs_struct.gs, "user_regs_struct", "gs");
+	} else {
+		/*
+		 * Note: Sometimes kernel debuginfo doesn't contain
+		 * user_regs_struct structure information. Instead, we
+		 * take offsets from actual datatype.
+		 */
+		OFFSET(user_regs_struct.r15) = offsetof(struct user_regs_struct, r15);
+		OFFSET(user_regs_struct.r14) = offsetof(struct user_regs_struct, r14);
+		OFFSET(user_regs_struct.r13) = offsetof(struct user_regs_struct, r13);
+		OFFSET(user_regs_struct.r12) = offsetof(struct user_regs_struct, r12);
+		OFFSET(user_regs_struct.bp) = offsetof(struct user_regs_struct, bp);
+		OFFSET(user_regs_struct.bx) = offsetof(struct user_regs_struct, bx);
+		OFFSET(user_regs_struct.r11) = offsetof(struct user_regs_struct, r11);
+		OFFSET(user_regs_struct.r10) = offsetof(struct user_regs_struct, r10);
+		OFFSET(user_regs_struct.r9) = offsetof(struct user_regs_struct, r9);
+		OFFSET(user_regs_struct.r8) = offsetof(struct user_regs_struct, r8);
+		OFFSET(user_regs_struct.ax) = offsetof(struct user_regs_struct, ax);
+		OFFSET(user_regs_struct.cx) = offsetof(struct user_regs_struct, cx);
+		OFFSET(user_regs_struct.dx) = offsetof(struct user_regs_struct, dx);
+		OFFSET(user_regs_struct.si) = offsetof(struct user_regs_struct, si);
+		OFFSET(user_regs_struct.di) = offsetof(struct user_regs_struct, di);
+		OFFSET(user_regs_struct.orig_ax) = offsetof(struct user_regs_struct, orig_ax);
+		OFFSET(user_regs_struct.ip) = offsetof(struct user_regs_struct, ip);
+		OFFSET(user_regs_struct.cs) = offsetof(struct user_regs_struct, cs);
+		OFFSET(user_regs_struct.flags) = offsetof(struct user_regs_struct, flags);
+		OFFSET(user_regs_struct.sp) = offsetof(struct user_regs_struct, sp);
+		OFFSET(user_regs_struct.ss) = offsetof(struct user_regs_struct, ss);
+		OFFSET(user_regs_struct.fs_base) = offsetof(struct user_regs_struct, fs_base);
+		OFFSET(user_regs_struct.gs_base) = offsetof(struct user_regs_struct, gs_base);
+		OFFSET(user_regs_struct.ds) = offsetof(struct user_regs_struct, ds);
+		OFFSET(user_regs_struct.es) = offsetof(struct user_regs_struct, es);
+		OFFSET(user_regs_struct.fs) = offsetof(struct user_regs_struct, fs);
+		OFFSET(user_regs_struct.gs) = offsetof(struct user_regs_struct, gs);
+	}
+#endif /* __x86_64__ */
+
+	OFFSET_INIT(kimage.segment, "kimage", "segment");
+
+	MEMBER_ARRAY_LENGTH_INIT(kimage.segment, "kimage", "segment");
+
+	SIZE_INIT(kexec_segment, "kexec_segment");
+	OFFSET_INIT(kexec_segment.mem, "kexec_segment", "mem");
+
+	OFFSET_INIT(elf64_hdr.e_phnum, "elf64_hdr", "e_phnum");
+	OFFSET_INIT(elf64_hdr.e_phentsize, "elf64_hdr", "e_phentsize");
+	OFFSET_INIT(elf64_hdr.e_phoff, "elf64_hdr", "e_phoff");
+
+	SIZE_INIT(elf64_hdr, "elf64_hdr");
+	OFFSET_INIT(elf64_phdr.p_type, "elf64_phdr", "p_type");
+	OFFSET_INIT(elf64_phdr.p_offset, "elf64_phdr", "p_offset");
+	OFFSET_INIT(elf64_phdr.p_paddr, "elf64_phdr", "p_paddr");
+	OFFSET_INIT(elf64_phdr.p_memsz, "elf64_phdr", "p_memsz");
 
 	return TRUE;
 }
@@ -1038,40 +1256,9 @@ get_mem_type(void)
 	return ret;
 }
 
-int
-generate_vmcoreinfo(void)
+void
+write_vmcoreinfo_data(void)
 {
-	if (!set_page_size(sysconf(_SC_PAGE_SIZE)))
-		return FALSE;
-
-	set_dwarf_debuginfo("vmlinux", NULL,
-			    info->name_vmlinux, info->fd_vmlinux);
-
-	if (!get_symbol_info())
-		return FALSE;
-
-	if (!get_structure_info())
-		return FALSE;
-
-	if (!get_srcfile_info())
-		return FALSE;
-
-	if ((SYMBOL(system_utsname) == NOT_FOUND_SYMBOL)
-	    && (SYMBOL(init_uts_ns) == NOT_FOUND_SYMBOL)) {
-		ERRMSG("Can't get the symbol of system_utsname.\n");
-		return FALSE;
-	}
-	if (!get_str_osrelease_from_vmlinux())
-		return FALSE;
-
-	if (!(info->kernel_version = get_kernel_version(info->release)))
-		return FALSE;
-
-	if (get_mem_type() == NOT_FOUND_MEMTYPE) {
-		ERRMSG("Can't find the memory type.\n");
-		return FALSE;
-	}
-
 	/*
 	 * write 1st kernel's OSRELEASE
 	 */
@@ -1108,6 +1295,10 @@ generate_vmcoreinfo(void)
 	WRITE_SYMBOL("log_buf_len", log_buf_len);
 	WRITE_SYMBOL("log_end", log_end);
 	WRITE_SYMBOL("max_pfn", max_pfn);
+	WRITE_SYMBOL("high_memory", high_memory);
+	WRITE_SYMBOL("node_remap_start_vaddr", node_remap_start_vaddr);
+	WRITE_SYMBOL("node_remap_end_vaddr", node_remap_end_vaddr);
+	WRITE_SYMBOL("node_remap_start_pfn", node_remap_start_pfn);
 
 	/*
 	 * write the structure size of 1st kernel
@@ -1159,6 +1350,9 @@ generate_vmcoreinfo(void)
 		WRITE_ARRAY_LENGTH("mem_section", mem_section);
 	if (SYMBOL(node_memblk) != NOT_FOUND_SYMBOL)
 		WRITE_ARRAY_LENGTH("node_memblk", node_memblk);
+	if (SYMBOL(node_remap_start_pfn) != NOT_FOUND_SYMBOL)
+		WRITE_ARRAY_LENGTH("node_remap_start_pfn",
+				   node_remap_start_pfn);
 
 	WRITE_ARRAY_LENGTH("zone.free_area", zone.free_area);
 	WRITE_ARRAY_LENGTH("free_area.free_list", free_area.free_list);
@@ -1174,6 +1368,43 @@ generate_vmcoreinfo(void)
 	 * write the source file of 1st kernel
 	 */
 	WRITE_SRCFILE("pud_t", pud_t);
+}
+
+int
+generate_vmcoreinfo(void)
+{
+	if (!set_page_size(sysconf(_SC_PAGE_SIZE)))
+		return FALSE;
+
+	set_dwarf_debuginfo("vmlinux", NULL,
+			    info->name_vmlinux, info->fd_vmlinux);
+
+	if (!get_symbol_info())
+		return FALSE;
+
+	if (!get_structure_info())
+		return FALSE;
+
+	if (!get_srcfile_info())
+		return FALSE;
+
+	if ((SYMBOL(system_utsname) == NOT_FOUND_SYMBOL)
+	    && (SYMBOL(init_uts_ns) == NOT_FOUND_SYMBOL)) {
+		ERRMSG("Can't get the symbol of system_utsname.\n");
+		return FALSE;
+	}
+	if (!get_str_osrelease_from_vmlinux())
+		return FALSE;
+
+	if (!(info->kernel_version = get_kernel_version(info->release)))
+		return FALSE;
+
+	if (get_mem_type() == NOT_FOUND_MEMTYPE) {
+		ERRMSG("Can't find the memory type.\n");
+		return FALSE;
+	}
+
+	write_vmcoreinfo_data();
 
 	return TRUE;
 }
@@ -1366,6 +1597,10 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("log_buf_len", log_buf_len);
 	READ_SYMBOL("log_end", log_end);
 	READ_SYMBOL("max_pfn", max_pfn);
+	READ_SYMBOL("high_memory", high_memory);
+	READ_SYMBOL("node_remap_start_vaddr", node_remap_start_vaddr);
+	READ_SYMBOL("node_remap_end_vaddr", node_remap_end_vaddr);
+	READ_SYMBOL("node_remap_start_pfn", node_remap_start_pfn);
 
 	READ_STRUCTURE_SIZE("page", page);
 	READ_STRUCTURE_SIZE("mem_section", mem_section);
@@ -1408,6 +1643,7 @@ read_vmcoreinfo(void)
 	READ_ARRAY_LENGTH("node_memblk", node_memblk);
 	READ_ARRAY_LENGTH("zone.free_area", zone.free_area);
 	READ_ARRAY_LENGTH("free_area.free_list", free_area.free_list);
+	READ_ARRAY_LENGTH("node_remap_start_pfn", node_remap_start_pfn);
 
 	READ_NUMBER("NR_FREE_PAGES", NR_FREE_PAGES);
 	READ_NUMBER("N_ONLINE", N_ONLINE);
@@ -2299,6 +2535,30 @@ initial(void)
 		if (!initialize_bitmap_memory())
 			return FALSE;
 
+	} else if (info->flag_sadump) {
+		if (info->flag_elf_dumpfile) {
+			MSG("'-E' option is disable, ");
+			MSG("because %s is sadump %s format.\n",
+			    info->name_memory, sadump_format_type_name());
+			return FALSE;
+		}
+
+		set_page_size(sadump_page_size());
+
+		if (!sadump_initialize_bitmap_memory())
+			return FALSE;
+
+		(void) sadump_set_timestamp(&info->timestamp);
+
+		/*
+		 * NOTE: phys_base is never saved by sadump and so
+		 * must be computed in some way. We here choose the
+		 * way of looking at linux_banner. See
+		 * sadump_virt_phys_base(). The processing is
+		 * postponed until debug information becomes
+		 * available.
+		 */
+
 	} else if (!get_phys_base())
 		return FALSE;
 
@@ -2374,8 +2634,21 @@ out:
 		return FALSE;
 
 	if (debug_info) {
+		if (info->flag_sadump)
+			(void) sadump_virt_phys_base();
+
 		if (!get_machdep_info())
 			return FALSE;
+
+		if (info->flag_sadump) {
+			int online_cpus;
+
+			online_cpus = sadump_num_online_cpus();
+			if (!online_cpus)
+				return FALSE;
+
+			set_nr_cpus(online_cpus);
+		}
 
 		if (!check_release())
 			return FALSE;
@@ -2383,11 +2656,27 @@ out:
 		if (!get_versiondep_info())
 			return FALSE;
 
+		/*
+		 * NOTE: This must be done before refering to
+		 * VMALLOC'ed memory. The first 640kB contains data
+		 * necessary for paging, like PTE. The absence of the
+		 * region affects reading VMALLOC'ed memory such as
+		 * module data.
+		 */
+		if (info->flag_sadump)
+			sadump_kdump_backup_region_init();
+
 		if (!get_numnodes())
 			return FALSE;
 
 		if (!get_mem_map())
 			return FALSE;
+
+		if (!info->flag_dmesg && info->flag_sadump &&
+		    sadump_check_debug_info() &&
+		    !sadump_generate_elf_note_from_dumpfile())
+			return FALSE;
+
 	} else {
 		if (!get_mem_map_without_mm())
 			return FALSE;
@@ -2514,6 +2803,12 @@ set_bit_on_1st_bitmap(unsigned long long pfn)
 }
 
 int
+clear_bit_on_1st_bitmap(unsigned long long pfn)
+{
+	return set_bitmap(info->bitmap1, pfn, 0);
+}
+
+int
 clear_bit_on_2nd_bitmap(unsigned long long pfn)
 {
 	return set_bitmap(info->bitmap2, pfn, 0);
@@ -2537,28 +2832,6 @@ clear_bit_on_2nd_bitmap_for_kernel(unsigned long long pfn)
 }
 
 static inline int
-is_on(char *bitmap, int i)
-{
-	return bitmap[i>>3] & (1 << (i & 7));
-}
-
-static inline int
-is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
-{
-	off_t offset;
-	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
-		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
-		lseek(bitmap->fd, offset, SEEK_SET);
-		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
-		if (pfn == 0)
-			bitmap->no_block = 0;
-		else
-			bitmap->no_block = pfn/PFN_BUFBITMAP;
-	}
-	return is_on(bitmap->buf, pfn%PFN_BUFBITMAP);
-}
-
-static inline int
 is_in_segs(unsigned long long paddr)
 {
 	if (info->flag_refiltering) {
@@ -2574,17 +2847,6 @@ is_in_segs(unsigned long long paddr)
 		return TRUE;
 	else
 		return FALSE;
-}
-
-static inline int
-is_zero_page(unsigned char *buf, long page_size)
-{
-	size_t i;
-
-	for (i = 0; i < page_size; i++)
-		if (buf[i])
-			return FALSE;
-	return TRUE;
 }
 
 int
@@ -2879,7 +3141,7 @@ page_to_pfn(unsigned long page)
 		if (page < mmd->mem_map)
 			continue;
 		index = (page - mmd->mem_map) / SIZE(page);
-		if (index > mmd->pfn_end - mmd->pfn_start)
+		if (index >= mmd->pfn_end - mmd->pfn_start)
 			continue;
 		pfn = mmd->pfn_start + index;
 		break;
@@ -3006,7 +3268,7 @@ dump_dmesg()
 	if (!open_files_for_creating_dumpfile())
 		return FALSE;
 
-	if (!info->flag_refiltering) {
+	if (!info->flag_refiltering && !info->flag_sadump) {
 		if (!get_elf_info(info->fd_memory, info->name_memory))
 			return FALSE;
 	}
@@ -3255,6 +3517,9 @@ create_1st_bitmap(void)
 
 	if (info->flag_refiltering)
 		return copy_1st_bitmap_from_memory();
+
+	if (info->flag_sadump)
+		return sadump_copy_1st_bitmap_from_memory();
 
 	/*
 	 * At first, clear all the bits on the 1st-bitmap.
@@ -3999,7 +4264,7 @@ write_kdump_header(void)
 	 */
 	strncpy(dh->signature, KDUMP_SIGNATURE, strlen(KDUMP_SIGNATURE));
 	dh->header_version = 5;
-  	dh->block_size     = info->page_size;
+	dh->block_size     = info->page_size;
 	dh->sub_hdr_size   = sizeof(kh) + size_note;
 	dh->sub_hdr_size   = divideup(dh->sub_hdr_size, dh->block_size);
 	dh->max_mapnr      = info->max_mapnr;
@@ -4038,16 +4303,23 @@ write_kdump_header(void)
 			    strerror(errno));
 			return FALSE;
 		}
-		if (lseek(info->fd_memory, offset_note, SEEK_SET) < 0) {
-			ERRMSG("Can't seek the dump memory(%s). %s\n",
-			    info->name_memory, strerror(errno));
-			goto out;
+
+		if (!info->flag_sadump) {
+			if (lseek(info->fd_memory, offset_note, SEEK_SET) < 0) {
+				ERRMSG("Can't seek the dump memory(%s). %s\n",
+				       info->name_memory, strerror(errno));
+				goto out;
+			}
+			if (read(info->fd_memory, buf, size_note) != size_note) {
+				ERRMSG("Can't read the dump memory(%s). %s\n",
+				       info->name_memory, strerror(errno));
+				goto out;
+			}
+		} else {
+			if (!sadump_read_elf_note(buf, size_note))
+				goto out;
 		}
-		if (read(info->fd_memory, buf, size_note) != size_note) {
-			ERRMSG("Can't read the dump memory(%s). %s\n",
-			    info->name_memory, strerror(errno));
-			goto out;
-		}
+
 		if (!write_buffer(info->fd_dumpfile, kh.offset_note, buf,
 		    kh.size_note, info->name_dumpfile))
 			goto out;
@@ -4355,7 +4627,7 @@ read_pfn(unsigned long long pfn, unsigned char *buf)
 	size_t size1, size2;
 
 	paddr = pfn_to_paddr(pfn);
-	if (info->flag_refiltering) {
+	if (info->flag_refiltering || info->flag_sadump) {
 		if (!readmem(PADDR, paddr, buf, info->page_size)) {
 			ERRMSG("Can't get the page data.\n");
 			return FALSE;
@@ -5068,7 +5340,7 @@ get_xen_info(void)
 
 	if ((info->domain_list = (struct domain_list *)
 	      malloc(sizeof(struct domain_list) * (num_domain + 2))) == NULL) {
-		ERRMSG("Can't allcate memory for domain_list.\n");
+		ERRMSG("Can't allocate memory for domain_list.\n");
 		return FALSE;
 	}
 
@@ -5435,9 +5707,9 @@ initial_xen(void)
 	off_t offset;
 	unsigned long size;
 
-#ifdef __powerpc__
+#if defined(__powerpc64__) || defined(__powerpc32__)
 	MSG("\n");
-	MSG("ppc64 xen is not supported.\n");
+	MSG("Xen is not supported on powerpc.\n");
 	return FALSE;
 #else
 	if(!info->flag_elf_dumpfile) {
@@ -5756,7 +6028,7 @@ create_dumpfile(void)
 	if (!open_files_for_creating_dumpfile())
 		return FALSE;
 
-	if (!info->flag_refiltering) {
+	if (!info->flag_refiltering && !info->flag_sadump) {
 		if (!get_elf_info(info->fd_memory, info->name_memory))
 			return FALSE;
 	}
@@ -6033,7 +6305,7 @@ copy_same_data(int src_fd, int dst_fd, off_t offset, unsigned long size)
 	char *buf = NULL;
 
 	if ((buf = malloc(size)) == NULL) {
-		ERRMSG("Can't allcate memory.\n");
+		ERRMSG("Can't allocate memory.\n");
 		return FALSE;
 	}
 	if (lseek(src_fd, offset, SEEK_SET) < 0) {
@@ -6135,7 +6407,7 @@ reassemble_kdump_header(void)
 	offset = (DISKDUMP_HEADER_BLOCKS + dh.sub_hdr_size) * dh.block_size;
 	info->len_bitmap = dh.bitmap_blocks * dh.block_size;
 	if ((buf_bitmap = malloc(info->len_bitmap)) == NULL) {
-		ERRMSG("Can't allcate memory for bitmap.\n");
+		ERRMSG("Can't allocate memory for bitmap.\n");
 		goto out;
 	}
 	if (lseek(fd, offset, SEEK_SET) < 0) {
@@ -6212,7 +6484,7 @@ reassemble_kdump_pages(void)
 		return FALSE;
 	}
 	if ((data = malloc(data_buf_size)) == NULL) {
-		ERRMSG("Can't allcate memory for page data.\n");
+		ERRMSG("Can't allocate memory for page data.\n");
 		free_cache_data(&cd_pd);
 		free_cache_data(&cd_data);
 		return FALSE;
@@ -6326,7 +6598,7 @@ reassemble_kdump_pages(void)
 		if (SPLITTING_SIZE_EI(i) > data_buf_size) {
 			data_buf_size = SPLITTING_SIZE_EI(i);
 			if ((data = realloc(data, data_buf_size)) == NULL) {
-				ERRMSG("Can't allcate memory for eraseinfo"
+				ERRMSG("Can't allocate memory for eraseinfo"
 					" data.\n");
 				goto out;
 			}
@@ -6500,20 +6772,34 @@ check_param_for_creating_dumpfile(int argc, char *argv[])
 	if (info->name_filterconfig && !info->name_vmlinux)
 		return FALSE;
 
+	if (info->flag_sadump_diskset && !sadump_is_supported_arch())
+		return FALSE;
+
 	if ((argc == optind + 2) && !info->flag_flatten
-				 && !info->flag_split) {
+				 && !info->flag_split
+				 && !info->flag_sadump_diskset) {
 		/*
 		 * Parameters for creating the dumpfile from vmcore.
 		 */
 		info->name_memory   = argv[optind];
 		info->name_dumpfile = argv[optind+1];
 
-	} else if ((argc > optind + 2) && info->flag_split) {
+	} else if (info->flag_split && (info->flag_sadump_diskset
+					? (argc >= optind + 2)
+					: (argc > optind + 2))) {
+		int num_vmcore;
+
 		/*
 		 * Parameters for creating multiple dumpfiles from vmcore.
 		 */
-		info->num_dumpfile = argc - optind - 1;
-		info->name_memory  = argv[optind];
+		if (info->flag_sadump_diskset) {
+			num_vmcore = 0;
+			info->name_memory = sadump_head_disk_name_memory();
+		} else {
+			num_vmcore = 1;
+			info->name_memory = argv[optind];
+		}
+		info->num_dumpfile = argc - optind - num_vmcore;
 
 		if (info->flag_elf_dumpfile) {
 			MSG("Options for splitting dumpfile cannot be used with Elf format.\n");
@@ -6526,7 +6812,15 @@ check_param_for_creating_dumpfile(int argc, char *argv[])
 			return FALSE;
 		}
 		for (i = 0; i < info->num_dumpfile; i++)
-			SPLITTING_DUMPFILE(i) = argv[optind + 1 + i];
+			SPLITTING_DUMPFILE(i) = argv[optind + num_vmcore + i];
+
+	} else if ((argc == optind + 1) && !info->flag_split
+					&& info->flag_sadump_diskset) {
+		info->name_dumpfile = argv[optind];
+		info->name_memory = sadump_head_disk_name_memory();
+
+		DEBUG_MSG("name_dumpfile: %s\n", info->name_dumpfile);
+		DEBUG_MSG("name_memory: %s\n", info->name_memory);
 
 	} else if ((argc == optind + 1) && info->flag_flatten) {
 		/*
@@ -6594,6 +6888,7 @@ static struct option longopts[] = {
 	{"dump-dmesg", no_argument, NULL, 'M'}, 
 	{"config", required_argument, NULL, 'C'},
 	{"help", no_argument, NULL, 'h'},
+	{"diskset", required_argument, NULL, 'k'},
 	{0, 0, 0, 0}
 };
 
@@ -6660,6 +6955,11 @@ main(int argc, char *argv[])
 		case 'i':
 			info->flag_read_vmcoreinfo = 1;
 			info->name_vmcoreinfo = optarg;
+			break;
+		case 'k':
+			if (!sadump_add_diskset_info(optarg))
+				goto out;
+			info->flag_sadump_diskset = 1;
 			break;
 		case 'm':
 			message_level = atoi(optarg);
