@@ -1,4 +1,4 @@
-makedumpfile (1.4.3-1) UNRELEASED; urgency=low
+makedumpfile (1.4.3-1) unstable; urgency=low
 
   [ Louis Bouchard ]
   * Update packaging for upstream version 1.4.3
@@ -6,7 +6,7 @@ makedumpfile (1.4.3-1) UNRELEASED; urgency=low
   [ John Wright ]
   * Add Louis Bouchard to Uploaders.  Thanks!
 
- -- Louis Bouchard <louis@ubuntu.com>  Wed, 09 May 2012 14:36:52 +0200
+ -- John Wright <jsw@debian.org>  Sun, 10 Jun 2012 00:34:07 -0700
 
 makedumpfile (1.4.0-1) unstable; urgency=low
 
