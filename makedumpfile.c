@@ -257,7 +257,7 @@ readpmem_kdump_compressed(unsigned long long paddr, void *bufptr, size_t size)
 		goto error;
 	}
 
-	if (pd.flags & DUMP_DH_COMPRESSED) {
+	if (pd.flags & DUMP_DH_COMPRESSED_ZLIB) {
 		retlen = info->page_size;
 		ret = uncompress((unsigned char *)buf2, &retlen,
 					(unsigned char *)buf, pd.size);
@@ -266,6 +266,19 @@ readpmem_kdump_compressed(unsigned long long paddr, void *bufptr, size_t size)
 			goto error;
 		}
 		memcpy(bufptr, buf2 + page_offset, size);
+#ifdef USELZO
+	} else if (info->flag_lzo_support
+		   && (pd.flags & DUMP_DH_COMPRESSED_LZO)) {
+		retlen = info->page_size;
+		ret = lzo1x_decompress_safe((unsigned char *)buf, pd.size,
+					    (unsigned char *)buf2, &retlen,
+					    LZO1X_MEM_DECOMPRESS);
+		if ((ret != LZO_E_OK) || (retlen != info->page_size)) {
+			ERRMSG("Uncompress failed: %d\n", ret);
+			goto error;
+		}
+		memcpy(bufptr, buf2 + page_offset, size);
+#endif
 	} else
 		memcpy(bufptr, buf + page_offset, size);
 
@@ -2514,6 +2527,17 @@ initial(void)
 	unsigned long size;
 	int debug_info = FALSE;
 
+#ifdef USELZO
+	if (lzo_init() == LZO_E_OK)
+		info->flag_lzo_support = TRUE;
+#else
+	if (info->flag_compress == DUMP_DH_COMPRESSED_LZO) {
+		MSG("'-l' option is disabled, ");
+		MSG("because this binary doesn't support lzo compression.\n");
+		MSG("Try `make USELZO=on` when building.\n");
+	}
+#endif
+
 	if (!is_xen_memory() && info->flag_exclude_xen_dom) {
 		MSG("'-X' option is disable,");
 		MSG("because %s is not Xen's memory core image.\n", info->name_memory);
@@ -4693,7 +4717,23 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 
 	initialize_2nd_bitmap(&bitmap2);
 
+#ifdef USELZO
+	unsigned long len_buf_out_zlib, len_buf_out_lzo;
+	lzo_bytep wrkmem;
+
+	if ((wrkmem = malloc(LZO1X_1_MEM_COMPRESS)) == NULL) {
+		ERRMSG("Can't allocate memory for the working memory. %s\n",
+		       strerror(errno));
+		goto out;
+	}
+
+	len_buf_out_zlib = compressBound(info->page_size);
+	len_buf_out_lzo = info->page_size + info->page_size / 16 + 64 + 3;
+	len_buf_out = MAX(len_buf_out_zlib, len_buf_out_lzo);
+#else
 	len_buf_out = compressBound(info->page_size);
+#endif
+
 	if ((buf_out = malloc(len_buf_out)) == NULL) {
 		ERRMSG("Can't allocate memory for the compression buffer. %s\n",
 		    strerror(errno));
@@ -4775,13 +4815,25 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 		 * Compress the page data.
 		 */
 		size_out = len_buf_out;
-		if (info->flag_compress
-		    && (compress2(buf_out, &size_out, buf,
-		    info->page_size, Z_BEST_SPEED) == Z_OK)
+		if ((info->flag_compress & DUMP_DH_COMPRESSED_ZLIB)
+		    && ((size_out = len_buf_out),
+			compress2(buf_out, &size_out, buf, info->page_size,
+				  Z_BEST_SPEED) == Z_OK)
 		    && (size_out < info->page_size)) {
-			pd.flags = 1;
+			pd.flags = DUMP_DH_COMPRESSED_ZLIB;
 			pd.size  = size_out;
 			memcpy(buf, buf_out, pd.size);
+#ifdef USELZO
+		} else if (info->flag_lzo_support
+			   && (info->flag_compress & DUMP_DH_COMPRESSED_LZO)
+			   && ((size_out = info->page_size),
+			       lzo1x_1_compress(buf, info->page_size, buf_out,
+						&size_out, wrkmem) == LZO_E_OK)
+			   && (size_out < info->page_size)) {
+			pd.flags = DUMP_DH_COMPRESSED_LZO;
+			pd.size  = size_out;
+			memcpy(buf, buf_out, pd.size);
+#endif
 		} else {
 			pd.flags = 0;
 			pd.size  = info->page_size;
@@ -4822,6 +4874,10 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 out:
 	if (buf_out != NULL)
 		free(buf_out);
+#ifdef USELZO
+	if (wrkmem != NULL)
+		free(wrkmem);
+#endif
 
 	return ret;
 }
@@ -6912,7 +6968,7 @@ main(int argc, char *argv[])
 
 	info->block_order = DEFAULT_ORDER;
 	message_level = DEFAULT_MSG_LEVEL;
-	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:MRrsvXx:", longopts,
+	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:lMRrsvXx:", longopts,
 	    NULL)) != -1) {
 		switch (opt) {
 		case 'b':
@@ -6922,7 +6978,7 @@ main(int argc, char *argv[])
 			info->name_filterconfig = optarg;
 			break;
 		case 'c':
-			info->flag_compress = 1;
+			info->flag_compress = DUMP_DH_COMPRESSED_ZLIB;
 			break;
 		case 'D':
 			flag_debug = TRUE;
@@ -6960,6 +7016,9 @@ main(int argc, char *argv[])
 			if (!sadump_add_diskset_info(optarg))
 				goto out;
 			info->flag_sadump_diskset = 1;
+			break;
+		case 'l':
+			info->flag_compress = DUMP_DH_COMPRESSED_LZO;
 			break;
 		case 'm':
 			message_level = atoi(optarg);

@@ -1,7 +1,7 @@
 # makedumpfile
 
-VERSION=1.4.3
-DATE=29 February 2012
+VERSION=1.4.4
+DATE=29 May 2012
 
 # Honour the environment variable CC
 ifeq ($(strip $CC),)
@@ -48,6 +48,11 @@ OBJ_ARCH = arch/arm.o arch/x86.o arch/x86_64.o arch/ia64.o arch/ppc64.o arch/s39
 LIBS = -ldw -lbz2 -lebl -ldl -lelf -lz
 ifneq ($(LINKTYPE), dynamic)
 LIBS := -static $(LIBS)
+endif
+
+ifeq ($(USELZO), on)
+LIBS := -llzo2 $(LIBS)
+CFLAGS += -DUSELZO
 endif
 
 all: makedumpfile
