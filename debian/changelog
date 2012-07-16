@@ -1,3 +1,9 @@
+makedumpfile (1.4.4-1) unstable; urgency=low
+
+  * New upstream version
+
+ -- John Wright <jsw@debian.org>  Mon, 16 Jul 2012 04:01:21 -0600
+
 makedumpfile (1.4.3-1) unstable; urgency=low
 
   [ Louis Bouchard ]
