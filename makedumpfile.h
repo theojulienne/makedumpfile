@@ -173,6 +173,11 @@ isAnon(unsigned long mapping)
 #define FILENAME_STDOUT		"STDOUT"
 
 /*
+ * For cyclic processing
+ */
+#define DEFAULT_BUFSIZE_CYCLIC         (1024 * 1024)
+
+/*
  * Minimam vmcore has 2 ProgramHeaderTables(PT_NOTE and PT_LOAD).
  */
 #define MIN_ELF32_HEADER_SIZE \
@@ -236,12 +241,6 @@ do { \
 #define OFFSET_INIT(X, Y, Z) \
 do { \
 	if ((OFFSET(X) = get_member_offset(Y, Z, DWARF_INFO_GET_MEMBER_OFFSET)) \
-	     == FAILED_DWARFINFO) \
-		return FALSE; \
-} while (0)
-#define OFFSET_IN_UNION_INIT(X, Y, Z) \
-do { \
-	if ((OFFSET(X) = get_member_offset(Y, Z, DWARF_INFO_GET_MEMBER_OFFSET_IN_UNION)) \
 	     == FAILED_DWARFINFO) \
 		return FALSE; \
 } while (0)
@@ -383,7 +382,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 2, 16)/* linux-3.2.16 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 4, 8)/* linux-3.4.8 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -801,6 +800,7 @@ struct DumpInfo {
 	int		flag_rearrange;      /* flag of creating dumpfile from
 						flattened format */
 	int		flag_split;	     /* splitting vmcore */
+  	int		flag_cyclic;	     /* cyclic processing to keep memory consumption */
 	int		flag_reassemble;     /* reassemble multiple dumpfiles into one */
 	int		flag_refiltering;    /* refilter from kdump-compressed file */
 	int		flag_force;	     /* overwrite existing stuff */
@@ -923,6 +923,17 @@ struct DumpInfo {
 	 */
 	unsigned long long split_start_pfn;  
 	unsigned long long split_end_pfn;  
+
+	/*
+	 * for cyclic processing
+	 */
+	char               *partial_bitmap1;
+	char               *partial_bitmap2;
+	unsigned long long cyclic_start_pfn;
+	unsigned long long cyclic_end_pfn;  
+	unsigned long long num_dumpable;
+	unsigned long      bufsize_cyclic;
+	unsigned long      pfn_cyclic;
 
 	/*
 	 * sadump info:
@@ -1394,6 +1405,24 @@ is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
 }
 
 static inline int
+is_dumpable_cyclic(char *bitmap, unsigned long long pfn)
+{
+	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+		return FALSE;
+	else
+		return is_on(bitmap, pfn - info->cyclic_start_pfn);
+}
+
+static inline int
+is_cyclic_region(unsigned long long pfn)
+{
+	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+		return FALSE;
+	else
+		return TRUE;
+}
+
+static inline int
 is_zero_page(unsigned char *buf, long page_size)
 {
 	size_t i;
@@ -1477,5 +1506,12 @@ struct elf_prstatus {
 };
 
 #endif
+
+/*
+ * Function Prototype.
+ */
+unsigned long long get_num_dumpable_cyclic(void);
+int get_loads_dumpfile_cyclic(void);
+
 
 #endif /* MAKEDUMPFILE_H */

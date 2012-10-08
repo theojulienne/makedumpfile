@@ -44,6 +44,8 @@ unsigned long long pfn_cache_private;
 unsigned long long pfn_user;
 unsigned long long pfn_free;
 
+unsigned long long num_dumped;
+
 int retcd = FAILED;	/* return code */
 
 #define INITIALIZE_LONG_TABLE(table, value) \
@@ -165,6 +167,7 @@ is_in_same_page(unsigned long vaddr1, unsigned long vaddr2)
 
 #define BITMAP_SECT_LEN 4096
 static inline int is_dumpable(struct dump_bitmap *, unsigned long long);
+static inline int is_dumpable_cyclic(char *bitmap, unsigned long long);
 unsigned long
 pfn_to_pos(unsigned long long pfn)
 {
@@ -874,15 +877,7 @@ get_structure_info(void)
 	SIZE_INIT(page, "page");
 	OFFSET_INIT(page.flags, "page", "flags");
 	OFFSET_INIT(page._count, "page", "_count");
-
 	OFFSET_INIT(page.mapping, "page", "mapping");
-
-	/*
-	 * On linux-2.6.16 or later, page.mapping is defined
-	 * in anonymous union.
-	 */
-	if (OFFSET(page.mapping) == NOT_FOUND_STRUCTURE)
-		OFFSET_IN_UNION_INIT(page.mapping, "page", "mapping");
 
 	/*
 	 * Some vmlinux(s) don't have debugging information about
@@ -2538,12 +2533,43 @@ initial(void)
 	}
 #endif
 
-	if (!is_xen_memory() && info->flag_exclude_xen_dom) {
-		MSG("'-X' option is disable,");
-		MSG("because %s is not Xen's memory core image.\n", info->name_memory);
-		MSG("Commandline parameter is invalid.\n");
-		MSG("Try `makedumpfile --help' for more information.\n");
-		return FALSE;
+	if (info->flag_cyclic) {
+		/*
+		 * buffer size is specified as Kbyte
+		 */
+		if (info->bufsize_cyclic == 0)
+			info->bufsize_cyclic = DEFAULT_BUFSIZE_CYCLIC;
+		else
+			info->bufsize_cyclic <<= 10;
+	
+		/*
+		 * Max buffer size is 100 MB
+		 */
+		if (info->bufsize_cyclic > (100 << 20)) {
+			MSG("Specified buffer size is too large, ");
+			MSG("The buffer size for the cyclic mode will be truncated to 100 MB.\n");
+			info->bufsize_cyclic = (100 << 20);
+		}
+		info->pfn_cyclic = info->bufsize_cyclic * BITPERBYTE;
+
+		DEBUG_MSG("\n");
+		DEBUG_MSG("Buffer size for the cyclic mode: %ld\n", info->bufsize_cyclic);
+	}
+
+	if (info->flag_exclude_xen_dom) {
+		if(info->flag_cyclic) {
+			info->flag_cyclic = FALSE;
+			MSG("Switched running mode from cyclic to non-cyclic,\n");
+			MSG("because the cyclic mode doesn't support Xen.\n");
+		}
+
+		if (!is_xen_memory()) {
+			MSG("'-X' option is disable,");
+			MSG("because %s is not Xen's memory core image.\n", info->name_memory);
+			MSG("Commandline parameter is invalid.\n");
+			MSG("Try `makedumpfile --help' for more information.\n");
+			return FALSE;
+		}
 	}
 
 	if (info->flag_refiltering) {
@@ -2553,6 +2579,14 @@ initial(void)
 							info->name_memory);
 			return FALSE;
 		}
+
+		if(info->flag_cyclic) {
+			info->flag_cyclic = FALSE;
+			MSG("Switched running mode from cyclic to non-cyclic,\n");
+			MSG("because the cyclic mode doesn't support refiltering\n");
+			MSG("kdump compressed format.\n");
+		}
+
 		info->phys_base = info->kh_memory->phys_base;
 		info->max_dump_level |= info->kh_memory->dump_level;
 
@@ -2565,6 +2599,12 @@ initial(void)
 			MSG("because %s is sadump %s format.\n",
 			    info->name_memory, sadump_format_type_name());
 			return FALSE;
+		}
+
+		if(info->flag_cyclic) {
+			info->flag_cyclic = FALSE;
+			MSG("Switched running mode from cyclic to non-cyclic,\n");
+			MSG("because the cyclic mode doesn't support sadump format.\n");
 		}
 
 		set_page_size(sadump_page_size());
@@ -2719,6 +2759,12 @@ initialize_bitmap(struct dump_bitmap *bitmap)
 }
 
 void
+initialize_bitmap_cyclic(char *bitmap)
+{
+	memset(bitmap, 0, info->bufsize_cyclic);
+}
+
+void
 initialize_1st_bitmap(struct dump_bitmap *bitmap)
 {
 	initialize_bitmap(bitmap);
@@ -2782,6 +2828,27 @@ set_bitmap(struct dump_bitmap *bitmap, unsigned long long pfn,
 }
 
 int
+set_bitmap_cyclic(char *bitmap, unsigned long long pfn, int val)
+{
+	int byte, bit;
+
+	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+		return FALSE;
+
+	/*
+	 * If val is 0, clear bit on the bitmap.
+	 */
+	byte = (pfn - info->cyclic_start_pfn)>>3;
+	bit  = (pfn - info->cyclic_start_pfn) & 7;
+	if (val)
+		bitmap[byte] |= 1<<bit;
+	else
+		bitmap[byte] &= ~(1<<bit);
+
+	return TRUE;
+}
+
+int
 sync_bitmap(struct dump_bitmap *bitmap)
 {
 	off_t offset;
@@ -2823,19 +2890,31 @@ sync_2nd_bitmap(void)
 int
 set_bit_on_1st_bitmap(unsigned long long pfn)
 {
-	return set_bitmap(info->bitmap1, pfn, 1);
+	if (info->flag_cyclic) {
+		return set_bitmap_cyclic(info->partial_bitmap1, pfn, 1);
+	} else {
+		return set_bitmap(info->bitmap1, pfn, 1);
+	}
 }
 
 int
 clear_bit_on_1st_bitmap(unsigned long long pfn)
 {
-	return set_bitmap(info->bitmap1, pfn, 0);
+	if (info->flag_cyclic) {
+		return set_bitmap_cyclic(info->partial_bitmap1, pfn, 0);
+	} else {
+		return set_bitmap(info->bitmap1, pfn, 0);
+	}
 }
 
 int
 clear_bit_on_2nd_bitmap(unsigned long long pfn)
 {
-	return set_bitmap(info->bitmap2, pfn, 0);
+	if (info->flag_cyclic) {
+		return set_bitmap_cyclic(info->partial_bitmap2, pfn, 0);
+	} else {
+		return set_bitmap(info->bitmap2, pfn, 0);
+	}
 }
 
 int
@@ -3224,9 +3303,9 @@ reset_bitmap_of_free_pages(unsigned long node_zones)
 				}
 				for (i = 0; i < (1<<order); i++) {
 					pfn = start_pfn + i;
-					clear_bit_on_2nd_bitmap_for_kernel(pfn);
+					if (clear_bit_on_2nd_bitmap_for_kernel(pfn))
+						found_free_pages++;
 				}
-				found_free_pages += i;
 
 				previous = curr;
 				if (!readmem(VADDR, curr+OFFSET(list_head.next),
@@ -3260,7 +3339,7 @@ reset_bitmap_of_free_pages(unsigned long node_zones)
 		ERRMSG("Can't get free_pages.\n");
 		return FALSE;
 	}
-	if (free_pages != found_free_pages) {
+	if (free_pages != found_free_pages && !info->flag_cyclic) {
 		/*
 		 * On linux-2.6.21 or later, the number of free_pages is
 		 * sometimes different from the one of the list "free_area",
@@ -3600,6 +3679,39 @@ create_1st_bitmap(void)
 	return TRUE;
 }
 
+int
+create_1st_bitmap_cyclic()
+{
+	int i;
+	unsigned long long pfn, pfn_bitmap1;
+	unsigned long long phys_start, phys_end;
+	unsigned long long pfn_start, pfn_end;
+
+	/*
+	 * At first, clear all the bits on the 1st-bitmap.
+	 */
+	initialize_bitmap_cyclic(info->partial_bitmap1);
+
+	/*
+	 * If page is on memory hole, set bit on the 1st-bitmap.
+	 */
+	pfn_bitmap1 = 0;
+	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
+		pfn_start = paddr_to_pfn(phys_start);
+		pfn_end   = paddr_to_pfn(phys_end);
+
+		if (!is_in_segs(pfn_to_paddr(pfn_start)))
+			pfn_start++;
+		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
+			if (set_bit_on_1st_bitmap(pfn))
+				pfn_bitmap1++;
+		}
+	}
+	pfn_memhole -= pfn_bitmap1;
+
+	return TRUE;
+}
+
 /*
  * Exclude the page filled with zero in case of creating an elf dumpfile.
  */
@@ -3640,8 +3752,8 @@ exclude_zero_pages(void)
 			}
 		}
 		if (is_zero_page(buf, info->page_size)) {
-			clear_bit_on_2nd_bitmap(pfn);
-			pfn_zero++;
+			if (clear_bit_on_2nd_bitmap(pfn))
+				pfn_zero++;
 		}
 	}
 
@@ -3672,6 +3784,12 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 	pfn_read_end   = 0;
 
 	for (pfn = pfn_start; pfn < pfn_end; pfn++, mem_map += SIZE(page)) {
+
+		/*
+		 * If this pfn doesn't belong to target region, skip this pfn.
+		 */
+		if (info->flag_cyclic && !is_cyclic_region(pfn))
+			continue;
 
 		/*
 		 * Exclude the memory hole.
@@ -3718,8 +3836,8 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 		if ((info->dump_level & DL_EXCLUDE_CACHE)
 		    && (isLRU(flags) || isSwapCache(flags))
 		    && !isPrivate(flags) && !isAnon(mapping)) {
-			clear_bit_on_2nd_bitmap_for_kernel(pfn);
-			pfn_cache++;
+			if (clear_bit_on_2nd_bitmap_for_kernel(pfn))
+				pfn_cache++;
 		}
 		/*
 		 * Exclude the cache page with the private page.
@@ -3727,16 +3845,16 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 		else if ((info->dump_level & DL_EXCLUDE_CACHE_PRI)
 		    && (isLRU(flags) || isSwapCache(flags))
 		    && !isAnon(mapping)) {
-			clear_bit_on_2nd_bitmap_for_kernel(pfn);
-			pfn_cache_private++;
+			if (clear_bit_on_2nd_bitmap_for_kernel(pfn))
+				pfn_cache_private++;
 		}
 		/*
 		 * Exclude the data page of the user process.
 		 */
 		else if ((info->dump_level & DL_EXCLUDE_USER_DATA)
 		    && isAnon(mapping)) {
-			clear_bit_on_2nd_bitmap_for_kernel(pfn);
-			pfn_user++;
+			if (clear_bit_on_2nd_bitmap_for_kernel(pfn))
+				pfn_user++;
 		}
 	}
 	return TRUE;
@@ -3769,6 +3887,84 @@ exclude_unnecessary_pages(void)
 	 */
 	print_progress(PROGRESS_UNN_PAGES, info->num_mem_map, info->num_mem_map);
 	print_execution_time(PROGRESS_UNN_PAGES, &tv_start);
+
+	return TRUE;
+}
+
+void
+copy_bitmap_cyclic(void)
+{
+	memcpy(info->partial_bitmap2, info->partial_bitmap1, info->bufsize_cyclic);
+}
+
+int
+exclude_unnecessary_pages_cyclic(void)
+{
+	unsigned int mm;
+	struct mem_map_data *mmd;
+	struct timeval tv_start;
+
+	/*
+	 * Copy 1st-bitmap to 2nd-bitmap.
+	 */
+	copy_bitmap_cyclic();
+
+	if (info->dump_level & DL_EXCLUDE_FREE)
+		if (!exclude_free_page())
+			return FALSE;
+
+	/*
+	 * Exclude cache pages, cache private pages, user data pages, and free pages.
+	 */
+	if (info->dump_level & DL_EXCLUDE_CACHE ||
+	    info->dump_level & DL_EXCLUDE_CACHE_PRI ||
+	    info->dump_level & DL_EXCLUDE_USER_DATA) {
+
+		gettimeofday(&tv_start, NULL);
+
+		for (mm = 0; mm < info->num_mem_map; mm++) {
+
+			print_progress(PROGRESS_UNN_PAGES, mm, info->num_mem_map);
+
+			mmd = &info->mem_map_data[mm];
+
+			if (mmd->mem_map == NOT_MEMMAP_ADDR)
+				continue;
+
+			if (mmd->pfn_end >= info->cyclic_start_pfn || mmd->pfn_start <= info->cyclic_end_pfn) {
+				if (!__exclude_unnecessary_pages(mmd->mem_map,
+								 mmd->pfn_start, mmd->pfn_end))
+					return FALSE;
+			}
+		}
+
+		/*
+		 * print [100 %]
+		 */
+		print_progress(PROGRESS_UNN_PAGES, info->num_mem_map, info->num_mem_map);
+		print_execution_time(PROGRESS_UNN_PAGES, &tv_start);
+	}
+
+	return TRUE;
+}
+
+int
+update_cyclic_region(unsigned long long pfn)
+{
+	if (is_cyclic_region(pfn))
+		return TRUE;
+
+	info->cyclic_start_pfn = round(pfn, info->pfn_cyclic);
+	info->cyclic_end_pfn = info->cyclic_start_pfn + info->pfn_cyclic;
+
+	if (info->cyclic_end_pfn > info->max_mapnr)
+		info->cyclic_end_pfn = info->max_mapnr;
+
+	if (!create_1st_bitmap_cyclic())
+		return FALSE;
+
+	if (!exclude_unnecessary_pages_cyclic())
+		return FALSE;
 
 	return TRUE;
 }
@@ -3914,6 +4110,38 @@ prepare_bitmap_buffer(void)
 	return TRUE;
 }
 
+int
+prepare_bitmap_buffer_cyclic(void)
+{
+	unsigned long tmp;
+
+	/*
+	 * Create 2 bitmaps (1st-bitmap & 2nd-bitmap) on block_size boundary.
+	 * The crash utility requires both of them to be aligned to block_size
+	 * boundary.
+	 */
+	tmp = divideup(divideup(info->max_mapnr, BITPERBYTE), info->page_size);
+	info->len_bitmap = tmp*info->page_size*2;
+
+	/*
+	 * Prepare partial bitmap buffers for cyclic processing.
+	 */
+	if ((info->partial_bitmap1 = (char *)malloc(info->bufsize_cyclic)) == NULL) {
+		ERRMSG("Can't allocate memory for the 1st-bitmap. %s\n",
+		       strerror(errno));
+		return FALSE;
+	}
+	if ((info->partial_bitmap2 = (char *)malloc(info->bufsize_cyclic)) == NULL) {
+		ERRMSG("Can't allocate memory for the 2nd-bitmap. %s\n",
+		       strerror(errno));
+		return FALSE;
+	}
+	initialize_bitmap_cyclic(info->partial_bitmap1);
+	initialize_bitmap_cyclic(info->partial_bitmap2);
+
+	return TRUE;
+}
+
 void
 free_bitmap_buffer(void)
 {
@@ -3934,14 +4162,21 @@ create_dump_bitmap(void)
 {
 	int ret = FALSE;
 
-	if (!prepare_bitmap_buffer())
-		goto out;
+	if (info->flag_cyclic) {
+		if (!prepare_bitmap_buffer_cyclic())
+			goto out;
 
-	if (!create_1st_bitmap())
-		goto out;
+		info->num_dumpable = get_num_dumpable_cyclic();
+	} else {
+		if (!prepare_bitmap_buffer())
+			goto out;
 
-	if (!create_2nd_bitmap())
-		goto out;
+		if (!create_1st_bitmap())
+			goto out;
+
+		if (!create_2nd_bitmap())
+			goto out;
+	}
 
 	ret = TRUE;
 out:
@@ -4126,9 +4361,16 @@ write_elf_header(struct cache_data *cd_header)
 	/*
 	 * Get the PT_LOAD number of the dumpfile.
 	 */
-	if (!(num_loads_dumpfile = get_loads_dumpfile())) {
-		ERRMSG("Can't get a number of PT_LOAD.\n");
-		goto out;
+	if (info->flag_cyclic) {
+		if (!(num_loads_dumpfile = get_loads_dumpfile_cyclic())) {
+			ERRMSG("Can't get a number of PT_LOAD.\n");
+			goto out;
+		}
+	} else {
+		if (!(num_loads_dumpfile = get_loads_dumpfile())) {
+			ERRMSG("Can't get a number of PT_LOAD.\n");
+			goto out;
+		}
 	}
 
 	if (is_elf64_memory()) { /* ELF64 */
@@ -4393,6 +4635,21 @@ get_num_dumpable(void)
 	return num_dumpable;
 }
 
+unsigned long long
+get_num_dumpable_cyclic(void)
+{
+	unsigned long long pfn, num_dumpable=0;
+
+	for (pfn = 0; pfn < info->max_mapnr; pfn++) {
+		if (!update_cyclic_region(pfn))
+			return FALSE;
+
+		if (is_dumpable_cyclic(info->partial_bitmap2, pfn))
+			num_dumpable++;
+	}
+
+	return num_dumpable;
+}
 
 int
 write_elf_load_segment(struct cache_data *cd_page, unsigned long long paddr,
@@ -4441,7 +4698,7 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	int i, phnum;
 	long page_size = info->page_size;
 	unsigned long long pfn, pfn_start, pfn_end, paddr, num_excluded;
-	unsigned long long num_dumpable, num_dumped = 0, per;
+	unsigned long long num_dumpable, per;
 	unsigned long long memsz, filesz;
 	unsigned long frac_head, frac_tail;
 	off_t off_seg_load, off_memory;
@@ -4696,9 +4953,314 @@ read_pfn(unsigned long long pfn, unsigned char *buf)
 }
 
 int
+get_loads_dumpfile_cyclic(void)
+{
+	int i, phnum, num_new_load = 0;
+	long page_size = info->page_size;
+	unsigned char buf[info->page_size];
+	unsigned long long pfn, pfn_start, pfn_end, num_excluded;
+	unsigned long frac_head, frac_tail;
+	Elf64_Phdr load;
+
+	/*
+	 * Initialize target region and bitmap.
+	 */
+	info->cyclic_start_pfn = 0;
+	info->cyclic_end_pfn = info->pfn_cyclic;
+	if (!create_1st_bitmap_cyclic())
+		return FALSE;
+	if (!exclude_unnecessary_pages_cyclic())
+		return FALSE;
+
+	if (!(phnum = get_phnum_memory()))
+		return FALSE;
+
+	for (i = 0; i < phnum; i++) {
+		if (!get_phdr_memory(i, &load))
+			return FALSE;
+		if (load.p_type != PT_LOAD)
+			continue;
+
+		pfn_start = paddr_to_pfn(load.p_paddr);
+		pfn_end = paddr_to_pfn(load.p_paddr + load.p_memsz);
+		frac_head = page_size - (load.p_paddr % page_size);
+		frac_tail = (load.p_paddr + load.p_memsz) % page_size;
+
+		num_new_load++;
+		num_excluded = 0;
+
+		if (frac_head && (frac_head != page_size))
+			pfn_start++;
+		if (frac_tail)
+			pfn_end++;
+
+		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
+			/*
+			 * Update target region and bitmap
+			 */
+			if (!is_cyclic_region(pfn)) {
+				if (!update_cyclic_region(pfn))
+					return FALSE;
+			}
+
+			if (!is_dumpable_cyclic(info->partial_bitmap2, pfn)) {
+				num_excluded++;
+				continue;
+			}
+
+			/*
+			 * Exclude zero pages.
+			 */
+			if (info->dump_level & DL_EXCLUDE_ZERO) {
+				if (!read_pfn(pfn, buf))
+					return FALSE;
+				if (is_zero_page(buf, page_size)) {
+					num_excluded++;
+					continue;
+				}
+			}
+
+			info->num_dumpable++;
+
+			/*
+			 * If the number of the contiguous pages to be excluded
+			 * is 256 or more, those pages are excluded really.
+			 * And a new PT_LOAD segment is created.
+			 */
+			if (num_excluded >= PFN_EXCLUDED) {
+				num_new_load++;
+			}
+			num_excluded = 0;
+		}
+	}
+	return num_new_load;
+}
+
+int
+write_elf_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
+{
+	int i, phnum;
+	long page_size = info->page_size;
+	unsigned char buf[info->page_size];
+	unsigned long long pfn, pfn_start, pfn_end, paddr, num_excluded;
+	unsigned long long num_dumpable, per;
+	unsigned long long memsz, filesz;
+	unsigned long frac_head, frac_tail;
+	off_t off_seg_load, off_memory;
+	Elf64_Phdr load;
+	struct timeval tv_start;
+
+	if (!info->flag_elf_dumpfile)
+		return FALSE;
+
+	num_dumpable = info->num_dumpable;
+	per = num_dumpable / 100;
+
+	off_seg_load   = info->offset_load_dumpfile;
+	cd_page->offset = info->offset_load_dumpfile;
+
+	/*
+	 * Reset counter for debug message.
+	 */
+	pfn_zero =  pfn_cache = pfn_cache_private = pfn_user = pfn_free = 0;
+	pfn_memhole = info->max_mapnr;
+
+	info->cyclic_start_pfn = 0;
+	info->cyclic_end_pfn = 0;
+	if (!update_cyclic_region(0))
+		return FALSE;
+
+	if (!(phnum = get_phnum_memory()))
+		return FALSE;
+
+	gettimeofday(&tv_start, NULL);
+
+	for (i = 0; i < phnum; i++) {
+		if (!get_phdr_memory(i, &load))
+			return FALSE;
+
+		if (load.p_type != PT_LOAD)
+			continue;
+
+		off_memory= load.p_offset;
+		paddr = load.p_paddr;
+		pfn_start = paddr_to_pfn(load.p_paddr);
+		pfn_end = paddr_to_pfn(load.p_paddr + load.p_memsz);
+		frac_head = page_size - (load.p_paddr % page_size);
+		frac_tail = (load.p_paddr + load.p_memsz)%page_size;
+
+		num_excluded = 0;
+		memsz  = 0;
+		filesz = 0;
+		if (frac_head && (frac_head != page_size)) {
+			memsz  = frac_head;
+			filesz = frac_head;
+			pfn_start++;
+		}
+
+		if (frac_tail)
+			pfn_end++;
+
+		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
+			/*
+			 * Update target region and partial bitmap if necessary.
+			 */
+			if (!update_cyclic_region(pfn))
+				return FALSE;
+
+			if (!is_dumpable_cyclic(info->partial_bitmap2, pfn)) {
+				num_excluded++;
+				if ((pfn == pfn_end - 1) && frac_tail)
+					memsz += frac_tail;
+				else
+					memsz += page_size;
+				continue;
+			}
+
+			/*
+			 * Exclude zero pages.
+			 */
+			if (info->dump_level & DL_EXCLUDE_ZERO) {
+				if (!read_pfn(pfn, buf))
+					return FALSE;
+				if (is_zero_page(buf, page_size)) {
+					pfn_zero++;
+					num_excluded++;
+					if ((pfn == pfn_end - 1) && frac_tail)
+						memsz += frac_tail;
+					else
+						memsz += page_size;
+					continue;
+				}
+			}
+
+			if ((num_dumped % per) == 0)
+				print_progress(PROGRESS_COPY, num_dumped, num_dumpable);
+
+			num_dumped++;
+
+			/*
+			 * The dumpable pages are continuous.
+			 */
+			if (!num_excluded) {
+				if ((pfn == pfn_end - 1) && frac_tail) {
+					memsz  += frac_tail;
+					filesz += frac_tail;
+				} else {
+					memsz  += page_size;
+					filesz += page_size;
+				}
+				continue;
+				/*
+				 * If the number of the contiguous pages to be excluded
+				 * is 255 or less, those pages are not excluded.
+				 */
+			} else if (num_excluded < PFN_EXCLUDED) {
+				if ((pfn == pfn_end - 1) && frac_tail) {
+					memsz  += frac_tail;
+					filesz += (page_size*num_excluded
+						   + frac_tail);
+				}else {
+					memsz  += page_size;
+					filesz += (page_size*num_excluded
+						   + page_size);
+				}
+				num_excluded = 0;
+				continue;
+			}
+
+			/*
+			 * If the number of the contiguous pages to be excluded
+			 * is 256 or more, those pages are excluded really.
+			 * And a new PT_LOAD segment is created.
+			 */
+			load.p_memsz = memsz;
+			load.p_filesz = filesz;
+			if (load.p_filesz)
+				load.p_offset = off_seg_load;
+			else
+				/*
+				 * If PT_LOAD segment does not have real data
+				 * due to the all excluded pages, the file
+				 * offset is not effective and it should be 0.
+				 */
+				load.p_offset = 0;
+
+			/*
+			 * Write a PT_LOAD header.
+			 */
+			if (!write_elf_phdr(cd_header, &load))
+				return FALSE;
+
+			/*
+			 * Write a PT_LOAD segment.
+			 */
+			if (load.p_filesz)
+				if (!write_elf_load_segment(cd_page, paddr,
+							    off_memory, load.p_filesz))
+					return FALSE;
+
+			load.p_paddr += load.p_memsz;
+#ifdef __x86__
+			/*
+			 * FIXME:
+			 *  (x86) Fill PT_LOAD headers with appropriate
+			 * virtual addresses.
+			 */
+			if (load.p_paddr < MAXMEM)
+				load.p_vaddr += load.p_memsz;
+#else
+			load.p_vaddr += load.p_memsz;
+#endif /* x86 */
+			paddr  = load.p_paddr;
+			off_seg_load += load.p_filesz;
+
+			num_excluded = 0;
+			memsz  = page_size;
+			filesz = page_size;
+		}
+		/*
+		 * Write the last PT_LOAD.
+		 */
+		load.p_memsz = memsz;
+		load.p_filesz = filesz;
+		load.p_offset = off_seg_load;
+
+		/*
+		 * Write a PT_LOAD header.
+		 */
+		if (!write_elf_phdr(cd_header, &load))
+			return FALSE;
+
+		/*
+		 * Write a PT_LOAD segment.
+		 */
+		if (load.p_filesz)
+			if (!write_elf_load_segment(cd_page, paddr,
+						    off_memory, load.p_filesz))
+				return FALSE;
+
+		off_seg_load += load.p_filesz;
+	}
+	if (!write_cache_bufsz(cd_header))
+		return FALSE;
+	if (!write_cache_bufsz(cd_page))
+		return FALSE;
+
+	/*
+	 * print [100 %]
+	 */
+	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_execution_time(PROGRESS_COPY, &tv_start);
+	PROGRESS_MSG("\n");
+
+	return TRUE;
+}
+
+int
 write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 {
- 	unsigned long long pfn, per, num_dumpable, num_dumped = 0;
+ 	unsigned long long pfn, per, num_dumpable;
 	unsigned long long start_pfn, end_pfn;
 	unsigned long size_out;
 	struct page_desc pd, pd_zero;
@@ -4869,6 +5431,150 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
+
+	ret = TRUE;
+out:
+	if (buf_out != NULL)
+		free(buf_out);
+#ifdef USELZO
+	if (wrkmem != NULL)
+		free(wrkmem);
+#endif
+
+	return ret;
+}
+
+int
+write_kdump_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page,
+			 struct page_desc *pd_zero, off_t *offset_data)
+{
+	unsigned long long pfn, per;
+	unsigned long long start_pfn, end_pfn;
+	unsigned long size_out;
+	struct page_desc pd;
+	unsigned char buf[info->page_size], *buf_out = NULL;
+	unsigned long len_buf_out;
+	const off_t failed = (off_t)-1;
+
+	int ret = FALSE;
+
+	if (info->flag_elf_dumpfile)
+		return FALSE;
+
+#ifdef USELZO
+	unsigned long len_buf_out_zlib, len_buf_out_lzo;
+	lzo_bytep wrkmem;
+
+	if ((wrkmem = malloc(LZO1X_1_MEM_COMPRESS)) == NULL) {
+		ERRMSG("Can't allocate memory for the working memory. %s\n",
+		       strerror(errno));
+		goto out;
+	}
+
+	len_buf_out_zlib = compressBound(info->page_size);
+	len_buf_out_lzo = info->page_size + info->page_size / 16 + 64 + 3;
+	len_buf_out = MAX(len_buf_out_zlib, len_buf_out_lzo);
+#else
+	len_buf_out = compressBound(info->page_size);
+#endif
+
+	if ((buf_out = malloc(len_buf_out)) == NULL) {
+		ERRMSG("Can't allocate memory for the compression buffer. %s\n",
+		       strerror(errno));
+		goto out;
+	}
+
+	per = info->num_dumpable / 100;
+
+	/*
+	 * Set a fileoffset of Physical Address 0x0.
+	 */
+	if (lseek(info->fd_memory, get_offset_pt_load_memory(), SEEK_SET)
+	    == failed) {
+		ERRMSG("Can't seek the dump memory(%s). %s\n",
+		       info->name_memory, strerror(errno));
+		goto out;
+	}
+
+	start_pfn = info->cyclic_start_pfn;
+	end_pfn   = info->cyclic_end_pfn;
+
+	if (info->flag_split) {
+		if (start_pfn < info->split_start_pfn)
+			start_pfn = info->split_start_pfn;
+		if (end_pfn > info->split_end_pfn)
+			end_pfn = info->split_end_pfn;
+	}
+
+	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
+
+		if ((num_dumped % per) == 0)
+			print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+
+		/*
+		 * Check the excluded page.
+		 */
+		if (!is_dumpable_cyclic(info->partial_bitmap2, pfn))
+			continue;
+
+		num_dumped++;
+
+		if (!read_pfn(pfn, buf))
+			goto out;
+
+		/*
+		 * Exclude the page filled with zeros.
+		 */
+		if ((info->dump_level & DL_EXCLUDE_ZERO)
+		    && is_zero_page(buf, info->page_size)) {
+			if (!write_cache(cd_header, pd_zero, sizeof(page_desc_t)))
+				goto out;
+			pfn_zero++;
+			continue;
+		}
+		/*
+		 * Compress the page data.
+		 */
+		size_out = len_buf_out;
+		if ((info->flag_compress & DUMP_DH_COMPRESSED_ZLIB)
+		    && ((size_out = len_buf_out),
+			compress2(buf_out, &size_out, buf, info->page_size,
+				  Z_BEST_SPEED) == Z_OK)
+		    && (size_out < info->page_size)) {
+			pd.flags = DUMP_DH_COMPRESSED_ZLIB;
+			pd.size  = size_out;
+			memcpy(buf, buf_out, pd.size);
+#ifdef USELZO
+		} else if (info->flag_lzo_support
+			   && (info->flag_compress & DUMP_DH_COMPRESSED_LZO)
+			   && ((size_out = info->page_size),
+			       lzo1x_1_compress(buf, info->page_size, buf_out,
+						&size_out, wrkmem) == LZO_E_OK)
+			   && (size_out < info->page_size)) {
+			pd.flags = DUMP_DH_COMPRESSED_LZO;
+			pd.size  = size_out;
+			memcpy(buf, buf_out, pd.size);
+#endif
+		} else {
+			pd.flags = 0;
+			pd.size  = info->page_size;
+		}
+		pd.page_flags = 0;
+		pd.offset     = *offset_data;
+		*offset_data  += pd.size;
+
+                /*
+                 * Write the page header.
+                 */
+                if (!write_cache(cd_header, &pd, sizeof(page_desc_t)))
+                        goto out;
+
+                /*
+                 * Write the page data.
+                 */
+                if (!write_cache(cd_page, buf, pd.size))
+                        goto out;
+        }
 
 	ret = TRUE;
 out:
@@ -5151,6 +5857,111 @@ out:
 	return ret;
 }
 
+int
+write_kdump_bitmap_cyclic(void)
+{
+	off_t offset;
+        int increment;
+	int ret = FALSE;
+
+	increment = divideup(info->cyclic_end_pfn - info->cyclic_start_pfn, BITPERBYTE);
+
+	if (info->flag_elf_dumpfile)
+		return FALSE;
+
+	offset = info->offset_bitmap1;
+	if (!write_buffer(info->fd_dumpfile, offset,
+			  info->partial_bitmap1, increment, info->name_dumpfile))
+		goto out;
+
+	offset += info->len_bitmap / 2;
+	if (!write_buffer(info->fd_dumpfile, offset,
+			  info->partial_bitmap2, increment, info->name_dumpfile))
+		goto out;
+
+	info->offset_bitmap1 += increment;
+
+	ret = TRUE;
+out:
+
+	return ret;
+}
+
+int
+write_kdump_pages_and_bitmap_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
+{
+	struct page_desc pd_zero;
+	off_t offset_data=0;
+	struct disk_dump_header *dh = info->dump_header;
+	unsigned char buf[info->page_size];
+	unsigned long long pfn;
+	struct timeval tv_start;
+
+	gettimeofday(&tv_start, NULL);
+
+	/*
+	 * Reset counter for debug message.
+	 */
+	pfn_zero =  pfn_cache = pfn_cache_private = pfn_user = pfn_free = 0;
+	pfn_memhole = info->max_mapnr;
+
+	cd_header->offset
+		= (DISKDUMP_HEADER_BLOCKS + dh->sub_hdr_size + dh->bitmap_blocks)
+		* dh->block_size;
+	cd_page->offset = cd_header->offset + sizeof(page_desc_t)*info->num_dumpable;
+	offset_data = cd_page->offset;
+	
+	/*
+	 * Write the data of zero-filled page.
+	 */
+	if (info->dump_level & DL_EXCLUDE_ZERO) {
+		pd_zero.size = info->page_size;
+		pd_zero.flags = 0;
+		pd_zero.offset = offset_data;
+		pd_zero.page_flags = 0;
+		memset(buf, 0, pd_zero.size);
+		if (!write_cache(cd_page, buf, pd_zero.size))
+			return FALSE;
+		offset_data += pd_zero.size;
+	}
+
+	/*
+	 * Write pages and bitmap cyclically.
+	 */
+	info->cyclic_start_pfn = 0;
+	info->cyclic_end_pfn = 0;
+	for (pfn = 0; pfn < info->max_mapnr; pfn++) {
+		if (is_cyclic_region(pfn))
+			continue;
+
+		if (!update_cyclic_region(pfn))
+                        return FALSE;
+
+		if (!write_kdump_pages_cyclic(cd_header, cd_page, &pd_zero, &offset_data))
+			return FALSE;
+
+		if (!write_kdump_bitmap_cyclic())
+			return FALSE;
+        }
+
+	/*
+	 * Write the remainder.
+	 */
+	if (!write_cache_bufsz(cd_page))
+		return FALSE;
+	if (!write_cache_bufsz(cd_header))
+		return FALSE;
+
+	/*
+	 * print [100 %]
+	 */
+	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+	print_execution_time(PROGRESS_COPY, &tv_start);
+	PROGRESS_MSG("\n");
+
+	return TRUE;
+}
+	
 void
 close_vmcoreinfo(void)
 {
@@ -5924,9 +6735,21 @@ writeout_dumpfile(void)
 	if (info->flag_elf_dumpfile) {
 		if (!write_elf_header(&cd_header))
 			goto out;
-		if (!write_elf_pages(&cd_header, &cd_page))
-			goto out;
+		if (info->flag_cyclic) {
+			if (!write_elf_pages_cyclic(&cd_header, &cd_page))
+				goto out;
+		} else {
+			if (!write_elf_pages(&cd_header, &cd_page))
+				goto out;
+		}
 		if (!write_elf_eraseinfo(&cd_header))
+			goto out;
+	} else if (info->flag_cyclic) {
+		if (!write_kdump_header())
+			goto out;
+		if (!write_kdump_pages_and_bitmap_cyclic(&cd_header, &cd_page))
+			goto out;
+		if (!write_kdump_eraseinfo(&cd_page))
 			goto out;
 	} else {
 		if (!write_kdump_header())
@@ -5968,22 +6791,31 @@ setup_splitting(void)
 	if (info->num_dumpfile <= 1)
 		return FALSE;
 
-	initialize_2nd_bitmap(&bitmap2);
-
-	pfn_per_dumpfile = num_dumpable / info->num_dumpfile;
-	start_pfn = end_pfn = 0;
-	for (i = 0; i < info->num_dumpfile; i++) {
-		start_pfn = end_pfn;
-		if (i == (info->num_dumpfile - 1)) {
-			end_pfn  = info->max_mapnr;
-		} else {
-			for (j = 0; j < pfn_per_dumpfile; end_pfn++) {
-				if (is_dumpable(&bitmap2, end_pfn))
-					j++;
-			}
+	if (info->flag_cyclic) {
+		for (i = 0; i < info->num_dumpfile; i++) {
+			SPLITTING_START_PFN(i) = divideup(info->max_mapnr, info->num_dumpfile) * i;
+			SPLITTING_END_PFN(i)   = divideup(info->max_mapnr, info->num_dumpfile) * (i + 1);
 		}
-		SPLITTING_START_PFN(i) = start_pfn;
-		SPLITTING_END_PFN(i)   = end_pfn;
+		if (SPLITTING_END_PFN(i-1) > info->max_mapnr)
+			SPLITTING_END_PFN(i-1) = info->max_mapnr;
+        } else {
+		initialize_2nd_bitmap(&bitmap2);
+
+		pfn_per_dumpfile = num_dumpable / info->num_dumpfile;
+		start_pfn = end_pfn = 0;
+		for (i = 0; i < info->num_dumpfile; i++) {
+			start_pfn = end_pfn;
+			if (i == (info->num_dumpfile - 1)) {
+				end_pfn  = info->max_mapnr;
+			} else {
+				for (j = 0; j < pfn_per_dumpfile; end_pfn++) {
+					if (is_dumpable(&bitmap2, end_pfn))
+						j++;
+				}
+			}
+			SPLITTING_START_PFN(i) = start_pfn;
+			SPLITTING_END_PFN(i)   = end_pfn;
+		}
 	}
 
 	return TRUE;
@@ -6517,7 +7349,7 @@ reassemble_kdump_pages(void)
 	off_t offset_first_ph, offset_ph_org, offset_eraseinfo;
 	off_t offset_data_new, offset_zero_page = 0;
 	unsigned long long pfn, start_pfn, end_pfn;
-	unsigned long long num_dumpable, num_dumped;
+	unsigned long long num_dumpable;
 	unsigned long size_eraseinfo;
 	struct dump_bitmap bitmap2;
 	struct disk_dump_header dh;
@@ -6945,6 +7777,8 @@ static struct option longopts[] = {
 	{"config", required_argument, NULL, 'C'},
 	{"help", no_argument, NULL, 'h'},
 	{"diskset", required_argument, NULL, 'k'},
+	{"non-cyclic", no_argument, NULL, 'Y'},
+	{"cyclic-buffer", required_argument, NULL, 'Z'},
 	{0, 0, 0, 0}
 };
 
@@ -6966,6 +7800,11 @@ main(int argc, char *argv[])
 	}
 	initialize_tables();
 
+	/*
+	 * By default, makedumpfile works in constant memory space.
+	 */
+	info->flag_cyclic = TRUE;
+	
 	info->block_order = DEFAULT_ORDER;
 	message_level = DEFAULT_MSG_LEVEL;
 	while ((opt = getopt_long(argc, argv, "b:cDd:EFfg:hi:lMRrsvXx:", longopts,
@@ -7053,9 +7892,15 @@ main(int argc, char *argv[])
 		case 'y':
 			info->name_xen_syms = optarg;
 			break;
+		case 'Y':
+			info->flag_cyclic = FALSE;
+			break;
 		case 'z':
 			info->flag_read_vmcoreinfo = 1;
 			info->name_vmcoreinfo = optarg;
+			break;
+		case 'Z':
+			info->bufsize_cyclic = atoi(optarg);
 			break;
 		case '?':
 			MSG("Commandline parameter is invalid.\n");
@@ -7199,6 +8044,10 @@ out:
 			free(info->splitting_info);
 		if (info->p2m_mfn_frame_list != NULL)
 			free(info->p2m_mfn_frame_list);
+		if (info->partial_bitmap1 != NULL)
+			free(info->partial_bitmap1);
+		if (info->partial_bitmap2 != NULL)
+			free(info->partial_bitmap2);
 		free(info);
 	}
 	free_elf_info();
