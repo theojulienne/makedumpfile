@@ -45,6 +45,9 @@
   6.Build with lzo support:
     # make USELZO=on ; make install
     The user has to prepare lzo library.
+  7.Build with snappy support:
+    # make USESNAPPY=on ; make install
+    The user has to prepare snappy library.
 
 * SUPPORTED KERNELS
   This makedumpfile supports the following kernels.
@@ -85,6 +88,8 @@
   3.2    | OK | ** | OK |    |    | ** |    | -- | OK | OK |    |    |
   3.3    | OK | ** |    |    |    | ** |    | -- | OK | OK |    |    |
   3.4    | OK | ** |    |    |    | ** |    | -- | OK | OK |    |    |
+  3.5    | OK | ** |    |    |    | ** |    | -- | OK | OK |    |    |
+  3.6    | OK | ** |    |    |    | ** |    | -- | OK | OK |    |    |
 
   OK    : Support.
   --    : Not support.

@@ -1,7 +1,7 @@
 # makedumpfile
 
-VERSION=1.5.0
-DATE=6 Sep 2012
+VERSION=1.5.1
+DATE=6 Dec 2012
 
 # Honour the environment variable CC
 ifeq ($(strip $CC),)
@@ -53,6 +53,11 @@ endif
 ifeq ($(USELZO), on)
 LIBS := -llzo2 $(LIBS)
 CFLAGS += -DUSELZO
+endif
+
+ifeq ($(USESNAPPY), on)
+LIBS := -lsnappy $(LIBS)
+CFLAGS += -DUSESNAPPY
 endif
 
 all: makedumpfile
