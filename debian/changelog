@@ -1,3 +1,12 @@
+makedumpfile (1.5.1-1) unstable; urgency=low
+
+  * Merge of new upstream version 1.5.1
+  * Add --dmesg-fix from upstream 1.5.2 for kernels 3.5
+    and above
+  * Add creation of /var/crash/dmesg.{timestamp} by kdump-config
+
+ -- Louis Bouchard <louis.bouchard@canonical.com>  Tue, 05 Feb 2013 09:55:43 +0100
+
 makedumpfile (1.5.0-1) unstable; urgency=low
 
   * New upstream version 1.5.0
