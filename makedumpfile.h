@@ -140,6 +140,8 @@ test_bit(int nr, unsigned long addr)
 #define isLRU(flags)		test_bit(NUMBER(PG_lru), flags)
 #define isPrivate(flags)	test_bit(NUMBER(PG_private), flags)
 #define isSwapCache(flags)	test_bit(NUMBER(PG_swapcache), flags)
+#define isHWPOISON(flags)	(test_bit(NUMBER(PG_hwpoison), flags) \
+				&& (NUMBER(PG_hwpoison) != NOT_FOUND_NUMBER))
 
 static inline int
 isAnon(unsigned long mapping)
@@ -149,8 +151,8 @@ isAnon(unsigned long mapping)
 
 #define PAGESIZE()		(info->page_size)
 #define PAGESHIFT()		(info->page_shift)
-#define PAGEOFFSET(X)		(((unsigned long)(X)) & (PAGESIZE() - 1))
-#define PAGEBASE(X)		(((unsigned long)(X)) & ~(PAGESIZE() - 1))
+#define PAGEOFFSET(X)		(((unsigned long long)(X)) & (PAGESIZE() - 1))
+#define PAGEBASE(X)		(((unsigned long long)(X)) & ~(PAGESIZE() - 1))
 
 /*
  * for SPARSEMEM
@@ -204,6 +206,7 @@ isAnon(unsigned long mapping)
 #define FILENAME_BITMAP		"kdump_bitmapXXXXXX"
 #define FILENAME_STDOUT		"STDOUT"
 
+
 /*
  * Minimam vmcore has 2 ProgramHeaderTables(PT_NOTE and PT_LOAD).
  */
@@ -213,12 +216,16 @@ isAnon(unsigned long mapping)
 	sizeof(Elf64_Ehdr)+sizeof(Elf64_Phdr)+sizeof(Elf64_Phdr)
 #define MIN_ELF_HEADER_SIZE \
 	MAX(MIN_ELF32_HEADER_SIZE, MIN_ELF64_HEADER_SIZE)
-#define STRNEQ(A, B)	(A && B && \
+static inline int string_exists(char *s) { return (s ? TRUE : FALSE); }
+#define STRNEQ(A, B)(string_exists((char *)(A)) &&	\
+		     string_exists((char *)(B)) &&	\
 	(strncmp((char *)(A), (char *)(B), strlen((char *)(B))) == 0))
 
 #define USHORT(ADDR)	*((unsigned short *)(ADDR))
 #define UINT(ADDR)	*((unsigned int *)(ADDR))
 #define ULONG(ADDR)	*((unsigned long *)(ADDR))
+#define ULONGLONG(ADDR)	*((unsigned long long *)(ADDR))
+
 
 /*
  * for symbol
@@ -566,7 +573,8 @@ do { \
 #define VMALLOCBASE     	(0xD000000000000000)
 #define KVBASE			(SYMBOL(_stext))
 #define _SECTION_SIZE_BITS	(24)
-#define _MAX_PHYSMEM_BITS	(44)
+#define _MAX_PHYSMEM_BITS_ORIG  (44)
+#define _MAX_PHYSMEM_BITS_3_7   (46)
 #endif
 
 #ifdef __powerpc32__
@@ -613,7 +621,6 @@ do { \
 #define _SEGMENT_INDEX_SHIFT	20
 
 /* Hardware bits in the page table entry */
-#define _PAGE_CO		0x100	/* HW Change-bit override */
 #define _PAGE_ZERO		0x800	/* Bit pos 52 must conatin zero */
 #define _PAGE_INVALID		0x400	/* HW invalid bit */
 #define _PAGE_INDEX_SHIFT	12
@@ -815,6 +822,8 @@ struct cache_data {
 	size_t	cache_size;
 	off_t	offset;
 };
+typedef unsigned long int ulong;
+typedef unsigned long long int ulonglong;
 
 /*
  * makedumpfile header
@@ -903,6 +912,12 @@ struct DumpInfo {
 	 */
 	char		*name_filterconfig;
 	FILE		*file_filterconfig;
+
+	/*
+	 * Filter config file containing eppic language filtering rules
+	 * to filter out kernel data from vmcore
+	 */
+	char		*name_eppic_config;
 
 	/*
 	 * diskdimp info:
@@ -1090,6 +1105,8 @@ struct symbol_table {
 	unsigned long long	log_buf;
 	unsigned long long	log_buf_len;
 	unsigned long long	log_end;
+	unsigned long long	log_first_idx;
+	unsigned long long	log_next_idx;
 	unsigned long long	max_pfn;
 	unsigned long long	node_remap_start_vaddr;
 	unsigned long long	node_remap_end_vaddr;
@@ -1169,6 +1186,7 @@ struct size_table {
 	long	cpumask_t;
 	long	kexec_segment;
 	long	elf64_hdr;
+	long	log;
 
 	long	pageflags;
 };
@@ -1302,6 +1320,13 @@ struct offset_table {
 		long	p_paddr;
 		long	p_memsz;
 	} elf64_phdr;
+
+	struct log_s {
+		long ts_nsec;
+		long len;
+		long text_len;
+	} log;
+
 };
 
 /*
@@ -1344,6 +1369,7 @@ struct number_table {
 	long	PG_swapcache;
 	long	PG_buddy;
 	long	PG_slab;
+	long    PG_hwpoison;
 
 	long	PAGE_BUDDY_MAPCOUNT_VALUE;
 };
