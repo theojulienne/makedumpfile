@@ -1,3 +1,13 @@
+makedumpfile (1.5.3-1) unstable; urgency=low
+
+  [ Louis Bouchard ]
+  * New upstream version
+    - Drop 0003-PATCH-dump-dmesg-fix-for-post-3.5-kernels.patch
+      (included upstream)
+    - Rebase 0002-Use-install-instead-of-cp-in-Makefile.patch
+
+ -- John Wright <jsw@debian.org>  Sun, 31 Mar 2013 20:45:37 -0700
+
 makedumpfile (1.5.1-1) unstable; urgency=low
 
   * Merge of new upstream version 1.5.1
