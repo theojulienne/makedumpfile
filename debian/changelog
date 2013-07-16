@@ -1,5 +1,12 @@
 makedumpfile (1.5.3-1) unstable; urgency=low
 
+  [Louis Bouchard]
+  * New upstream version
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Tue, 16 Jul 2013 16:05:09 +0200
+
+makedumpfile (1.5.3-1) unstable; urgency=low
+
   [ Louis Bouchard ]
   * New upstream version
     - Drop 0003-PATCH-dump-dmesg-fix-for-post-3.5-kernels.patch
