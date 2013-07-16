@@ -1,4 +1,4 @@
-.TH MAKEDUMPFILE 8 "19 Feb 2013" "makedumpfile v1.5.3" "Linux System Administrator's Manual"
+.TH MAKEDUMPFILE 8 "3 Jul 2013" "makedumpfile v1.5.4" "Linux System Administrator's Manual"
 .SH NAME
 makedumpfile \- make a small dumpfile of kdump
 .SH SYNOPSIS
@@ -362,6 +362,11 @@ on the following example.
 .B Example:
 .br
 # makedumpfile \-\-reassemble dumpfile1 dumpfile2 dumpfile
+
+.TP
+\fB\-b\fR \fI<order>\fR
+Cache 2^order pages in ram when generating \fIDUMPFILE\fR before writing to output.
+The default value is 4.
 
 .TP
 \fB\-\-cyclic\-buffer\fR \fIbuffer_size\fR

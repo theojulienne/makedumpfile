@@ -232,27 +232,201 @@ read_page_desc(unsigned long long paddr, page_desc_t *pd)
 }
 
 static int
-readpage_elf(unsigned long long paddr, void *bufptr)
+update_mmap_range(off_t offset, int initial) {
+	off_t start_offset;
+	off_t map_size;
+	off_t max_offset = get_max_file_offset();
+
+	munmap(info->mmap_buf,
+	       info->mmap_end_offset - info->mmap_start_offset);
+
+	/*
+	 * offset for mmap() must be page aligned.
+	 */
+	start_offset = round(offset, info->page_size);
+
+	map_size = MIN(max_offset - start_offset, info->mmap_region_size);
+
+	info->mmap_buf = mmap(NULL, map_size, PROT_READ, MAP_PRIVATE,
+				     info->fd_memory, start_offset);
+
+	if (info->mmap_buf == MAP_FAILED) {
+		if (!initial)
+			DEBUG_MSG("Can't map [%llx-%llx] with mmap()\n %s",
+				  (ulonglong)start_offset,
+				  (ulonglong)(start_offset + map_size),
+				  strerror(errno));
+		return FALSE;
+	}
+
+	info->mmap_start_offset = start_offset;
+	info->mmap_end_offset = start_offset + map_size;
+
+	return TRUE;
+}
+
+static int
+is_mapped_with_mmap(off_t offset) {
+
+	if (info->flag_usemmap
+	    && offset >= info->mmap_start_offset
+	    && offset < info->mmap_end_offset)
+		return TRUE;
+	else
+		return FALSE;
+}
+
+int
+initialize_mmap(void) {
+	info->mmap_region_size = MAP_REGION;
+	info->mmap_buf = MAP_FAILED;
+	if (!update_mmap_range(0, 1))
+		return FALSE;
+
+	return TRUE;
+}
+
+static int
+read_with_mmap(off_t offset, void *bufptr, unsigned long size) {
+	size_t read_size;
+
+next_region:
+
+	if (!is_mapped_with_mmap(offset))
+		if (!update_mmap_range(offset, 0))
+			return FALSE;
+
+	read_size = MIN(info->mmap_end_offset - offset, size);
+
+	memcpy(bufptr, info->mmap_buf +
+	       (offset - info->mmap_start_offset), read_size);
+
+	offset += read_size;
+	bufptr += read_size;
+	size -= read_size;
+
+	if (size > 0)
+		goto next_region;
+
+	return TRUE;
+}
+
+static int
+read_from_vmcore(off_t offset, void *bufptr, unsigned long size)
 {
 	const off_t failed = (off_t)-1;
-	off_t offset = 0;
 
-	if (!(offset = paddr_to_offset(paddr))) {
-		ERRMSG("Can't convert a physical address(%llx) to offset.\n",
-		       paddr);
+	if (info->flag_usemmap) {
+		if (!read_with_mmap(offset, bufptr, size)) {
+			ERRMSG("Can't read the dump memory(%s) with mmap().\n",
+			       info->name_memory);
+			return FALSE;
+		}
+	} else {
+		if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
+			ERRMSG("Can't seek the dump memory(%s). (offset: %llx) %s\n",
+			       info->name_memory, (unsigned long long)offset, strerror(errno));
+			return FALSE;
+		}
+
+		if (read(info->fd_memory, bufptr, size) != size) {
+			ERRMSG("Can't read the dump memory(%s). %s\n",
+			       info->name_memory, strerror(errno));
+			return FALSE;
+		}
+	}
+
+	return TRUE;
+}
+
+/*
+ * This function is specific for reading page from ELF.
+ *
+ * If reading the separated page on different PT_LOAD segments,
+ * this function gets the page data from both segments. This is
+ * worthy of ia64 /proc/vmcore. In ia64 /proc/vmcore, region 5
+ * segment is overlapping to region 7 segment. The following is
+ * example (page_size is 16KBytes):
+ *
+ *  region |       paddr        |       memsz
+ * --------+--------------------+--------------------
+ *     5   | 0x0000000004000000 | 0x0000000000638ce0
+ *     7   | 0x0000000004000000 | 0x0000000000db3000
+ *
+ * In the above example, the last page of region 5 is 0x4638000
+ * and the segment does not contain complete data of this page.
+ * Then this function gets the data of 0x4638000 - 0x4638ce0
+ * from region 5, and gets the remaining data from region 7.
+ */
+static int
+readpage_elf(unsigned long long paddr, void *bufptr)
+{
+	off_t offset1, offset2;
+	size_t size1, size2;
+	unsigned long long phys_start, phys_end, frac_head = 0;
+
+	offset1 = paddr_to_offset(paddr);
+	offset2 = paddr_to_offset(paddr + info->page_size);
+	phys_start = paddr;
+	phys_end = paddr + info->page_size;
+
+	/*
+	 * Check the case phys_start isn't aligned by page size like below:
+	 *
+	 *                           phys_start
+	 *                           = 0x40ffda7000
+	 *         |<-- frac_head -->|------------- PT_LOAD -------------
+	 *     ----+-----------------------+---------------------+----
+	 *         |         pfn:N         |       pfn:N+1       | ...
+	 *     ----+-----------------------+---------------------+----
+	 *         |
+	 *     pfn_to_paddr(pfn:N)               # page size = 16k
+	 *     = 0x40ffda4000
+	 */
+	if (!offset1) {
+		phys_start = page_head_to_phys_start(paddr);
+		offset1 = paddr_to_offset(phys_start);
+		frac_head = phys_start - paddr;
+		memset(bufptr, 0, frac_head);
+	}
+
+	/*
+	 * Check the case phys_end isn't aligned by page size like the
+	 * phys_start's case.
+	 */
+	if (!offset2) {
+		phys_end = page_head_to_phys_end(paddr);
+		offset2 = paddr_to_offset(phys_end);
+		memset(bufptr + (phys_end - paddr), 0, info->page_size - (phys_end - paddr));
+	}
+
+	/*
+	 * Check the separated page on different PT_LOAD segments.
+	 */
+	if (offset1 + (phys_end - phys_start) == offset2) {
+		size1 = phys_end - phys_start;
+	} else {
+		for (size1 = 1; size1 < info->page_size - frac_head; size1++) {
+			offset2 = paddr_to_offset(phys_start + size1);
+			if (offset1 + size1 != offset2)
+				break;
+		}
+	}
+
+	if(!read_from_vmcore(offset1, bufptr + frac_head, size1)) {
+		ERRMSG("Can't read the dump memory(%s).\n",
+		       info->name_memory);
 		return FALSE;
 	}
 
-	if (lseek(info->fd_memory, offset, SEEK_SET) == failed) {
-		ERRMSG("Can't seek the dump memory(%s). (offset: %llx) %s\n",
-		       info->name_memory, (unsigned long long)offset, strerror(errno));
-		return FALSE;
-	}
+	if (size1 + frac_head != info->page_size) {
+		size2 = phys_end - (phys_start + size1);
 
-	if (read(info->fd_memory, bufptr, info->page_size) != info->page_size) {
-		ERRMSG("Can't read the dump memory(%s). %s\n",
-		       info->name_memory, strerror(errno));
-		return FALSE;
+		if(!read_from_vmcore(offset2, bufptr + frac_head + size1, size2)) {
+			ERRMSG("Can't read the dump memory(%s).\n",
+			       info->name_memory);
+			return FALSE;
+		}
 	}
 
 	return TRUE;
@@ -337,13 +511,12 @@ readpage_kdump_compressed(unsigned long long paddr, void *bufptr)
 int
 readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 {
-	size_t read_size, next_size;
-	unsigned long long next_addr;
+	size_t read_size, size_orig = size;
 	unsigned long long paddr, maddr = NOT_PADDR;
 	unsigned long long pgaddr;
 	void *pgbuf;
-	char *next_ptr;
 
+next_page:
 	switch (type_addr) {
 	case VADDR:
 		if ((paddr = vaddr_to_paddr(addr)) == NOT_PADDR) {
@@ -386,21 +559,11 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 		goto error;
 	}
 
-	read_size = size;
-
 	/*
 	 * Read each page, because pages are not necessarily continuous.
 	 * Ex) pages in vmalloc area
 	 */
-	if (!is_in_same_page(addr, addr + size - 1)) {
-		read_size = info->page_size - (addr % info->page_size);
-		next_addr = roundup(addr + 1, info->page_size);
-		next_size = size - read_size;
-		next_ptr  = (char *)bufptr + read_size;
-
-		if (!readmem(type_addr, next_addr, next_ptr, next_size))
-			goto error;
-	}
+	read_size = MIN(info->page_size - PAGEOFFSET(paddr), size);
 
 	pgaddr = PAGEBASE(paddr);
 	pgbuf = cache_search(pgaddr);
@@ -423,10 +586,18 @@ readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 	}
 
 	memcpy(bufptr, pgbuf + PAGEOFFSET(paddr), read_size);
-	return size;
+
+	addr += read_size;
+	bufptr += read_size;
+	size -= read_size;
+
+	if (size > 0)
+		goto next_page;
+
+	return size_orig;
 
 error:
-	ERRMSG("type_addr: %d, addr:%llx, size:%zd\n", type_addr, addr, size);
+	ERRMSG("type_addr: %d, addr:%llx, size:%zd\n", type_addr, addr, size_orig);
 	return FALSE;
 }
 
@@ -730,6 +901,24 @@ open_dump_file(void)
 }
 
 int
+check_dump_file(const char *path)
+{
+	char *err_str;
+
+	if (access(path, F_OK) != 0)
+		return TRUE; /* File does not exist */
+	if (info->flag_force) {
+		if (access(path, W_OK) == 0)
+			return TRUE; /* We have write permission */
+		err_str = strerror(errno);
+	} else {
+		err_str = strerror(EEXIST);
+	}
+	ERRMSG("Can't open the dump file (%s). %s\n", path, err_str);
+	return FALSE;
+}
+
+int
 open_dump_bitmap(void)
 {
 	int i, fd;
@@ -857,6 +1046,7 @@ get_symbol_info(void)
 	SYMBOL_INIT(swapper_pg_dir, "swapper_pg_dir");
 	SYMBOL_INIT(init_level4_pgt, "init_level4_pgt");
 	SYMBOL_INIT(vmlist, "vmlist");
+	SYMBOL_INIT(vmap_area_list, "vmap_area_list");
 	SYMBOL_INIT(phys_base, "phys_base");
 	SYMBOL_INIT(node_online_map, "node_online_map");
 	SYMBOL_INIT(node_states, "node_states");
@@ -992,6 +1182,8 @@ get_structure_info(void)
 	OFFSET_INIT(node_memblk_s.nid, "node_memblk_s", "nid");
 
 	OFFSET_INIT(vm_struct.addr, "vm_struct", "addr");
+	OFFSET_INIT(vmap_area.va_start, "vmap_area", "va_start");
+	OFFSET_INIT(vmap_area.list, "vmap_area", "list");
 
 	/*
 	 * Get offset of the module members.
@@ -1371,6 +1563,7 @@ write_vmcoreinfo_data(void)
 	WRITE_SYMBOL("swapper_pg_dir", swapper_pg_dir);
 	WRITE_SYMBOL("init_level4_pgt", init_level4_pgt);
 	WRITE_SYMBOL("vmlist", vmlist);
+	WRITE_SYMBOL("vmap_area_list", vmap_area_list);
 	WRITE_SYMBOL("phys_base", phys_base);
 	WRITE_SYMBOL("node_online_map", node_online_map);
 	WRITE_SYMBOL("node_states", node_states);
@@ -1433,6 +1626,8 @@ write_vmcoreinfo_data(void)
 	WRITE_MEMBER_OFFSET("node_memblk_s.size", node_memblk_s.size);
 	WRITE_MEMBER_OFFSET("node_memblk_s.nid", node_memblk_s.nid);
 	WRITE_MEMBER_OFFSET("vm_struct.addr", vm_struct.addr);
+	WRITE_MEMBER_OFFSET("vmap_area.va_start", vmap_area.va_start);
+	WRITE_MEMBER_OFFSET("vmap_area.list", vmap_area.list);
 	WRITE_MEMBER_OFFSET("log.ts_nsec", log.ts_nsec);
 	WRITE_MEMBER_OFFSET("log.len", log.len);
 	WRITE_MEMBER_OFFSET("log.text_len", log.text_len);
@@ -1687,6 +1882,7 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("swapper_pg_dir", swapper_pg_dir);
 	READ_SYMBOL("init_level4_pgt", init_level4_pgt);
 	READ_SYMBOL("vmlist", vmlist);
+	READ_SYMBOL("vmap_area_list", vmap_area_list);
 	READ_SYMBOL("phys_base", phys_base);
 	READ_SYMBOL("node_online_map", node_online_map);
 	READ_SYMBOL("node_states", node_states);
@@ -1742,6 +1938,8 @@ read_vmcoreinfo(void)
 	READ_MEMBER_OFFSET("node_memblk_s.size", node_memblk_s.size);
 	READ_MEMBER_OFFSET("node_memblk_s.nid", node_memblk_s.nid);
 	READ_MEMBER_OFFSET("vm_struct.addr", vm_struct.addr);
+	READ_MEMBER_OFFSET("vmap_area.va_start", vmap_area.va_start);
+	READ_MEMBER_OFFSET("vmap_area.list", vmap_area.list);
 	READ_MEMBER_OFFSET("log.ts_nsec", log.ts_nsec);
 	READ_MEMBER_OFFSET("log.len", log.len);
 	READ_MEMBER_OFFSET("log.text_len", log.text_len);
@@ -2875,8 +3073,19 @@ out:
 	if (!get_value_for_old_linux())
 		return FALSE;
 
-	if (info->flag_cyclic && (info->dump_level & DL_EXCLUDE_FREE))
+	/* use buddy identification of free pages whether cyclic or not */
+	/* (this can reduce pages scan of 1TB memory from 60sec to 30sec) */
+	if (info->dump_level & DL_EXCLUDE_FREE)
 		setup_page_is_buddy();
+
+	if (!initialize_mmap()) {
+		/* this kernel does not support mmap of vmcore */
+		DEBUG_MSG("Kernel can't mmap vmcore, using reads.\n");
+		info->flag_usemmap = FALSE;
+	} else {
+		DEBUG_MSG("read %s with mmap()\n", info->name_memory);
+		info->flag_usemmap = TRUE;
+	}
 
 	return TRUE;
 }
@@ -4029,8 +4238,6 @@ create_1st_bitmap(void)
 		pfn_start = paddr_to_pfn(phys_start);
 		pfn_end   = paddr_to_pfn(phys_end);
 
-		if (!is_in_segs(pfn_to_paddr(pfn_start)))
-			pfn_start++;
 		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
 			set_bit_on_1st_bitmap(pfn);
 			pfn_bitmap1++;
@@ -4065,14 +4272,13 @@ create_1st_bitmap_cyclic()
 
 	/*
 	 * If page is on memory hole, set bit on the 1st-bitmap.
+	 * (note that this is not done in cyclic mode)
 	 */
 	pfn_bitmap1 = 0;
 	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 		pfn_start = paddr_to_pfn(phys_start);
 		pfn_end   = paddr_to_pfn(phys_end);
 
-		if (!is_in_segs(pfn_to_paddr(pfn_start)))
-			pfn_start++;
 		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
 			if (set_bit_on_1st_bitmap(pfn))
 				pfn_bitmap1++;
@@ -4207,14 +4413,14 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 
 		/*
 		 * Exclude the free page managed by a buddy
+		 * Use buddy identification of free pages whether cyclic or not.
 		 */
 		if ((info->dump_level & DL_EXCLUDE_FREE)
-		    && info->flag_cyclic
 		    && info->page_is_buddy
 		    && info->page_is_buddy(flags, _mapcount, private, _count)) {
-			int i;
+			int i, nr_pages = 1 << private;
 
-			for (i = 0; i < (1 << private); ++i) {
+			for (i = 0; i < nr_pages; ++i) {
 				/*
 				 * According to combination of
 				 * MAX_ORDER and size of cyclic
@@ -4224,9 +4430,11 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 				 * See check_cyclic_buffer_overrun()
 				 * for the detail.
 				 */
-				clear_bit_on_2nd_bitmap_for_kernel(pfn + i);
+				if (clear_bit_on_2nd_bitmap_for_kernel(pfn + i))
+					pfn_free++;
 			}
-			pfn_free += i;
+			pfn += nr_pages - 1;
+			mem_map += (nr_pages - 1) * SIZE(page);
 		}
 		/*
 		 * Exclude the cache page without the private page.
@@ -4448,7 +4656,7 @@ create_2nd_bitmap(void)
 	/*
 	 * Exclude free pages.
 	 */
-	if (info->dump_level & DL_EXCLUDE_FREE)
+	if ((info->dump_level & DL_EXCLUDE_FREE) && !info->page_is_buddy)
 		if (!exclude_free_page())
 			return FALSE;
 
@@ -5297,74 +5505,17 @@ write_elf_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 	return TRUE;
 }
 
-/*
- * This function is specific for reading page.
- *
- * If reading the separated page on different PT_LOAD segments,
- * this function gets the page data from both segments. This is
- * worthy of ia64 /proc/vmcore. In ia64 /proc/vmcore, region 5
- * segment is overlapping to region 7 segment. The following is
- * example (page_size is 16KBytes):
- *
- *  region |       paddr        |       memsz
- * --------+--------------------+--------------------
- *     5   | 0x0000000004000000 | 0x0000000000638ce0
- *     7   | 0x0000000004000000 | 0x0000000000db3000
- *
- * In the above example, the last page of region 5 is 0x4638000
- * and the segment does not contain complete data of this page.
- * Then this function gets the data of 0x4638000 - 0x4638ce0
- * from region 5, and gets the remaining data from region 7.
- */
 int
 read_pfn(unsigned long long pfn, unsigned char *buf)
 {
 	unsigned long long paddr;
-	off_t offset1, offset2;
-	size_t size1, size2;
 
 	paddr = pfn_to_paddr(pfn);
-	if (info->flag_refiltering || info->flag_sadump) {
-		if (!readmem(PADDR, paddr, buf, info->page_size)) {
-			ERRMSG("Can't get the page data.\n");
-			return FALSE;
-		}
-		filter_data_buffer(buf, paddr, info->page_size);
-		return TRUE;
-	}
-
-	offset1 = paddr_to_offset(paddr);
-	offset2 = paddr_to_offset(paddr + info->page_size);
-
-	/*
-	 * Check the separated page on different PT_LOAD segments.
-	 */
-	if (offset1 + info->page_size == offset2) {
-		size1 = info->page_size;
-	} else {
-		for (size1 = 1; size1 < info->page_size; size1++) {
-			offset2 = paddr_to_offset(paddr + size1);
-			if (offset1 + size1 != offset2)
-				break;
-		}
-	}
-	if (!readmem(PADDR, paddr, buf, size1)) {
+	if (!readmem(PADDR, paddr, buf, info->page_size)) {
 		ERRMSG("Can't get the page data.\n");
 		return FALSE;
 	}
-	filter_data_buffer(buf, paddr, size1);
-	if (size1 != info->page_size) {
-		size2 = info->page_size - size1;
-		if (!offset2) {
-			memset(buf + size1, 0, size2);
-		} else {
-			if (!readmem(PADDR, paddr + size1, buf + size1, size2)) {
-				ERRMSG("Can't get the page data.\n");
-				return FALSE;
-			}
-			filter_data_buffer(buf + size1, paddr + size1, size2);
-		}
-	}
+
 	return TRUE;
 }
 
@@ -5375,7 +5526,6 @@ get_loads_dumpfile_cyclic(void)
 	long page_size = info->page_size;
 	unsigned char buf[info->page_size];
 	unsigned long long pfn, pfn_start, pfn_end, num_excluded;
-	unsigned long long paddr;
 	unsigned long frac_head, frac_tail;
 	Elf64_Phdr load;
 
@@ -5429,12 +5579,8 @@ get_loads_dumpfile_cyclic(void)
 			 * Exclude zero pages.
 			 */
 			if (info->dump_level & DL_EXCLUDE_ZERO) {
-				paddr = pfn_to_paddr(pfn);
-				if (!readmem(PADDR, paddr, buf, page_size)) {
-					ERRMSG("Can't get the page data(pfn:%llx,max_mapnr:%llx).\n",
-					       pfn, info->max_mapnr);
+				if (!read_pfn(pfn, buf))
 					return FALSE;
-				}
 				if (is_zero_page(buf, page_size)) {
 					num_excluded++;
 					continue;
@@ -5464,7 +5610,6 @@ write_elf_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
 	long page_size = info->page_size;
 	unsigned char buf[info->page_size];
 	unsigned long long pfn, pfn_start, pfn_end, paddr, num_excluded;
-	unsigned long long paddr_buf;
 	unsigned long long num_dumpable, per;
 	unsigned long long memsz, filesz;
 	unsigned long frac_head, frac_tail;
@@ -5544,12 +5689,8 @@ write_elf_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
 			 * Exclude zero pages.
 			 */
 			if (info->dump_level & DL_EXCLUDE_ZERO) {
-				paddr_buf = pfn_to_paddr(pfn);
-				if (!readmem(PADDR, paddr_buf, buf, page_size)) {
-					ERRMSG("Can't get the page data(pfn:%llx max_mapnr:%llx).\n",
-					       pfn, info->max_mapnr);
+				if (!read_pfn(pfn, buf))
 					return FALSE;
-				}
 				if (is_zero_page(buf, page_size)) {
 					pfn_zero++;
 					num_excluded++;
@@ -5797,6 +5938,7 @@ write_kdump_pages(struct cache_data *cd_header, struct cache_data *cd_page)
 
 		if (!read_pfn(pfn, buf))
 			goto out;
+		filter_data_buffer(buf, pfn_to_paddr(pfn), info->page_size);
 
 		/*
 		 * Exclude the page filled with zeros.
@@ -5975,6 +6117,7 @@ write_kdump_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_pag
 
 		if (!read_pfn(pfn, buf))
 			goto out;
+		filter_data_buffer(buf, pfn_to_paddr(pfn), info->page_size);
 
 		/*
 		 * Exclude the page filled with zeros.
@@ -8609,6 +8752,9 @@ main(int argc, char *argv[])
 			MSG("Try `makedumpfile --help' for more information.\n");
 			goto out;
 		}
+		if (!check_dump_file(info->name_dumpfile))
+			goto out;
+
 		if (!open_files_for_rearranging_dumpdata())
 			goto out;
 
@@ -8626,9 +8772,11 @@ main(int argc, char *argv[])
 			MSG("Try `makedumpfile --help' for more information.\n");
 			goto out;
 		}
-		if (!reassemble_dumpfile())
+		if (!check_dump_file(info->name_dumpfile))
 			goto out;
 
+		if (!reassemble_dumpfile())
+			goto out;
 		MSG("\n");
 		MSG("The dumpfile is saved to %s.\n", info->name_dumpfile);
 	} else if (info->flag_dmesg) {
@@ -8637,6 +8785,8 @@ main(int argc, char *argv[])
 			MSG("Try `makedumpfile --help' for more information.\n");
 			goto out;
 		}
+		if (!check_dump_file(info->name_dumpfile))
+			goto out;
 		if (!dump_dmesg())
 			goto out;
 
@@ -8648,6 +8798,16 @@ main(int argc, char *argv[])
 			MSG("Try `makedumpfile --help' for more information.\n");
 			goto out;
 		}
+		if (info->flag_split) {
+			for (i = 0; i < info->num_dumpfile; i++) {
+				if (!check_dump_file(SPLITTING_DUMPFILE(i)))
+					goto out;
+			}
+		} else {
+			if (!check_dump_file(info->name_dumpfile))
+				goto out;
+		}
+
 		if (!create_dumpfile())
 			goto out;
 

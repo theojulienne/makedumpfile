@@ -31,6 +31,7 @@
 #include <libelf.h>
 #include <byteswap.h>
 #include <getopt.h>
+#include <sys/mman.h>
 #ifdef USELZO
 #include <lzo/lzo1x.h>
 #endif
@@ -205,7 +206,7 @@ isAnon(unsigned long mapping)
 #define PFN_BUFBITMAP		(BITPERBYTE*BUFSIZE_BITMAP)
 #define FILENAME_BITMAP		"kdump_bitmapXXXXXX"
 #define FILENAME_STDOUT		"STDOUT"
-
+#define MAP_REGION		(4096*1024)
 
 /*
  * Minimam vmcore has 2 ProgramHeaderTables(PT_NOTE and PT_LOAD).
@@ -425,7 +426,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 6, 7)/* linux-3.6.7 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 9, 6)/* linux-3.9.6 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -617,6 +618,7 @@ do { \
 /* Bits in the segment table entry */
 #define _SEGMENT_ENTRY_ORIGIN	~0x7ffUL
 #define _SEGMENT_ENTRY_LARGE	0x400
+#define _SEGMENT_ENTRY_CO	0x100
 #define _SEGMENT_PAGE_SHIFT	31
 #define _SEGMENT_INDEX_SHIFT	20
 
@@ -885,6 +887,7 @@ struct DumpInfo {
 						flattened format */
 	int		flag_split;	     /* splitting vmcore */
   	int		flag_cyclic;	     /* cyclic processing to keep memory consumption */
+	int		flag_usemmap;	     /* /proc/vmcore supports mmap(2) */
 	int		flag_reassemble;     /* reassemble multiple dumpfiles into one */
 	int		flag_refiltering;    /* refilter from kdump-compressed file */
 	int		flag_force;	     /* overwrite existing stuff */
@@ -1040,6 +1043,14 @@ struct DumpInfo {
 	unsigned long      pfn_cyclic;
 
 	/*
+	 * for mmap
+	 */
+	char	*mmap_buf;
+	off_t	mmap_start_offset;
+	off_t	mmap_end_offset;
+	off_t   mmap_region_size;
+
+	/*
 	 * sadump info:
 	 */
 	int flag_sadump_diskset;
@@ -1095,6 +1106,7 @@ struct symbol_table {
 	unsigned long long	swapper_pg_dir;
 	unsigned long long	init_level4_pgt;
 	unsigned long long	vmlist;
+	unsigned long long	vmap_area_list;
 	unsigned long long	phys_base;
 	unsigned long long	node_online_map;
 	unsigned long long	node_states;
@@ -1232,6 +1244,10 @@ struct offset_table {
 	struct vm_struct {
 		long	addr;
 	} vm_struct;
+	struct vmap_area {
+		long	va_start;
+		long	list;
+	} vmap_area;
 
 	/*
 	 * for Xen extraction
