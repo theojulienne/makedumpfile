@@ -1,3 +1,12 @@
+makedumpfile (1.5.5-1) unstable; urgency=low
+
+  [ Louis Bouchard ]
+  * New upstream version
+    - Reworked debian/patches to use DEP3
+    - Use install statement from upstream Makefile
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Thu, 19 Dec 2013 11:31:10 +0100
+
 makedumpfile (1.5.4-1) unstable; urgency=low
 
   [Louis Bouchard]
