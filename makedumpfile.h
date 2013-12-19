@@ -128,6 +128,14 @@ enum {
 	MADDR_XEN
 };
 
+/*
+ * State of mmap(2)
+ */
+enum {
+	MMAP_DISABLE,
+	MMAP_TRY,
+	MMAP_ENABLE,
+};
 
 static inline int
 test_bit(int nr, unsigned long addr)
@@ -426,7 +434,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 9, 6)/* linux-3.9.6 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 11, 3)/* linux-3.11.3 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -576,6 +584,8 @@ do { \
 #define _SECTION_SIZE_BITS	(24)
 #define _MAX_PHYSMEM_BITS_ORIG  (44)
 #define _MAX_PHYSMEM_BITS_3_7   (46)
+#define REGION_SHIFT            (60UL)
+#define VMEMMAP_REGION_ID       (0xfUL)
 #endif
 
 #ifdef __powerpc32__
@@ -862,6 +872,11 @@ struct splitting_info {
 	unsigned long		size_eraseinfo;
 } splitting_info_t;
 
+struct ppc64_vmemmap {
+	unsigned long		phys;
+	unsigned long		virt;
+};
+
 struct DumpInfo {
 	int32_t		kernel_version;      /* version of first kernel*/
 	struct timeval	timestamp;
@@ -893,7 +908,9 @@ struct DumpInfo {
 	int		flag_force;	     /* overwrite existing stuff */
 	int		flag_exclude_xen_dom;/* exclude Domain-U from xen-kdump */
 	int             flag_dmesg;          /* dump the dmesg log out of the vmcore file */
+	int		flag_use_printk_log; /* did we read printk_log symbol name? */
 	int		flag_nospace;	     /* the flag of "No space on device" error */
+	int		flag_vmemmap;        /* kernel supports vmemmap address space */
 	unsigned long	vaddr_for_vtop;      /* virtual address for debugging */
 	long		page_size;           /* size of page */
 	long		page_shift;
@@ -908,6 +925,9 @@ struct DumpInfo {
 	unsigned long   vmalloc_end;
 	unsigned long	vmemmap_start;
 	unsigned long	vmemmap_end;
+	int		vmemmap_psize;
+	int		vmemmap_cnt;
+	struct ppc64_vmemmap	*vmemmap_list;
 
 	/*
 	 * Filter config file containing filter commands to filter out kernel
@@ -1165,6 +1185,13 @@ struct symbol_table {
 	unsigned long long	__per_cpu_load;
 	unsigned long long	cpu_online_mask;
 	unsigned long long	kexec_crash_image;
+
+	/*
+	 * vmemmap symbols on ppc64 arch
+	 */
+	unsigned long long		vmemmap_list;
+	unsigned long long		mmu_vmemmap_psize;
+	unsigned long long		mmu_psize_defs;
 };
 
 struct size_table {
@@ -1176,6 +1203,7 @@ struct size_table {
 	long	list_head;
 	long	node_memblk_s;
 	long	nodemask_t;
+	long	printk_log;
 
 	/*
 	 * for Xen extraction
@@ -1198,7 +1226,12 @@ struct size_table {
 	long	cpumask_t;
 	long	kexec_segment;
 	long	elf64_hdr;
-	long	log;
+
+	/*
+	 * vmemmap symbols on ppc64 arch
+	 */
+	long	vmemmap_backing;
+	long	mmu_psize_def;
 
 	long	pageflags;
 };
@@ -1337,11 +1370,24 @@ struct offset_table {
 		long	p_memsz;
 	} elf64_phdr;
 
-	struct log_s {
+	struct printk_log_s {
 		long ts_nsec;
 		long len;
 		long text_len;
-	} log;
+	} printk_log;
+
+	/*
+	 * vmemmap symbols on ppc64 arch
+	 */
+	struct mmu_psize_def {
+		long	shift;
+	} mmu_psize_def;
+
+	struct vmemmap_backing {
+		long	phys;
+		long	virt_addr;
+		long	list;
+	} vmemmap_backing;
 
 };
 
@@ -1466,18 +1512,17 @@ int get_xen_info_x86(void);
 #define ENTRY_MASK		(~0xfff0000000000fffULL)
 #define MAX_X86_64_FRAMES	(info->page_size / sizeof(unsigned long))
 
-#define PAGE_OFFSET_XEN_DOM0  (0xffff880000000000) /* different from linux */
-#define HYPERVISOR_VIRT_START (0xffff800000000000)
-#define HYPERVISOR_VIRT_END   (0xffff880000000000)
-#define DIRECTMAP_VIRT_START  (0xffff830000000000)
-#define DIRECTMAP_VIRT_END_V3 (0xffff840000000000)
-#define DIRECTMAP_VIRT_END_V4 (0xffff880000000000)
-#define DIRECTMAP_VIRT_END    (info->directmap_virt_end)
-#define XEN_VIRT_START_V3     (0xffff828c80000000)
-#define XEN_VIRT_START_V4     (0xffff82c480000000)
-#define XEN_VIRT_START        (info->xen_virt_start)
-#define XEN_VIRT_END          (XEN_VIRT_START + (1UL << 30))
-#define FRAMETABLE_VIRT_START 0xffff82f600000000
+#define PAGE_OFFSET_XEN_DOM0		(0xffff880000000000) /* different from linux */
+#define HYPERVISOR_VIRT_START		(0xffff800000000000)
+#define HYPERVISOR_VIRT_END		(0xffff880000000000)
+#define DIRECTMAP_VIRT_START		(0xffff830000000000)
+#define DIRECTMAP_VIRT_END_V3		(0xffff840000000000)
+#define DIRECTMAP_VIRT_END_V4		(0xffff880000000000)
+#define DIRECTMAP_VIRT_END		(info->directmap_virt_end)
+#define XEN_VIRT_START			(info->xen_virt_start)
+#define XEN_VIRT_END			(XEN_VIRT_START + (1UL << 30))
+#define FRAMETABLE_VIRT_START_V3	0xffff82f600000000
+#define FRAMETABLE_VIRT_START_V4_3	0xffff82e000000000
 
 #define is_xen_vaddr(x) \
 	((x) >= HYPERVISOR_VIRT_START && (x) < HYPERVISOR_VIRT_END)
@@ -1669,6 +1714,42 @@ struct elf_prstatus {
 };
 
 #endif
+
+/*
+ * Below are options which getopt_long can recognize. From OPT_START options are
+ * non-printable, just used for implementation.
+ */
+#define OPT_BLOCK_ORDER         'b'
+#define OPT_COMPRESS_ZLIB       'c'
+#define OPT_DEBUG               'D'
+#define OPT_DUMP_LEVEL          'd'
+#define OPT_ELF_DUMPFILE        'E'
+#define OPT_FLATTEN             'F'
+#define OPT_FORCE               'f'
+#define OPT_GENERATE_VMCOREINFO 'g'
+#define OPT_HELP                'h'
+#define OPT_READ_VMCOREINFO     'i'
+#define OPT_COMPRESS_LZO        'l'
+#define OPT_COMPRESS_SNAPPY     'p'
+#define OPT_REARRANGE           'R'
+#define OPT_VERSION             'v'
+#define OPT_EXCLUDE_XEN_DOM     'X'
+#define OPT_VMLINUX             'x'
+#define OPT_START               256
+#define OPT_SPLIT               OPT_START+0
+#define OPT_REASSEMBLE          OPT_START+1
+#define OPT_XEN_SYMS            OPT_START+2
+#define OPT_XEN_VMCOREINFO      OPT_START+3
+#define OPT_XEN_PHYS_START      OPT_START+4
+#define OPT_MESSAGE_LEVEL       OPT_START+5
+#define OPT_VTOP                OPT_START+6
+#define OPT_DUMP_DMESG          OPT_START+7
+#define OPT_CONFIG              OPT_START+8
+#define OPT_DISKSET             OPT_START+9
+#define OPT_NON_CYCLIC          OPT_START+10
+#define OPT_CYCLIC_BUFFER       OPT_START+11
+#define OPT_EPPIC               OPT_START+12
+#define OPT_NON_MMAP            OPT_START+13
 
 /*
  * Function Prototype.

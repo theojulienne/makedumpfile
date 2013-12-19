@@ -23,6 +23,10 @@
 #include "print_info.h"
 #include "sadump_mod.h"
 
+#include <arpa/inet.h> /* htonl, htons */
+
+#define SADUMP_EFI_GUID_TEXT_REPR_LEN 36
+
 #ifdef __x86__
 
 #define KEXEC_NOTE_HEAD_BYTES roundup(sizeof(Elf32_Nhdr), 4)
@@ -332,7 +336,7 @@ guid_to_str(efi_guid_t *guid, char *buf, size_t buflen)
 {
 	snprintf(buf, buflen,
 		 "%08x-%04x-%04x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-		 guid->data1, guid->data2, guid->data3,
+		 htonl(guid->data1), htons(guid->data2), htons(guid->data3),
 		 guid->data4[0], guid->data4[1], guid->data4[2],
 		 guid->data4[3], guid->data4[4], guid->data4[5],
 		 guid->data4[6], guid->data4[7]);
@@ -427,7 +431,7 @@ read_sadump_header(char *filename)
 	unsigned long bitmap_len, dumpable_bitmap_len;
 	enum sadump_format_type flag_sadump;
 	uint32_t smram_cpu_state_size = 0;
-	char guid[33];
+	char guid[SADUMP_EFI_GUID_TEXT_REPR_LEN+1];
 
 	if ((si->sph_memory = malloc(SADUMP_DEFAULT_BLOCK_SIZE)) == NULL) {
 		ERRMSG("Can't allocate memory for partition header buffer: "
@@ -664,7 +668,7 @@ read_sadump_header_diskset(int diskid, struct sadump_diskset_info *sdi)
 {
 	struct sadump_part_header *sph = NULL;
 	unsigned long offset = 0;
-	char guid[33];
+	char guid[SADUMP_EFI_GUID_TEXT_REPR_LEN+1];
 
 	if ((sph = malloc(si->sh_memory->block_size)) == NULL) {
 		ERRMSG("Can't allocate memory for partition header buffer. "
@@ -948,7 +952,6 @@ int
 readpage_sadump(unsigned long long paddr, void *bufptr)
 {
 	unsigned long long pfn, block, whole_offset, perdisk_offset;
-	ulong page_offset;
 	int fd_memory;
 
 	if (si->kdump_backed_up &&
@@ -957,7 +960,6 @@ readpage_sadump(unsigned long long paddr, void *bufptr)
 		paddr += si->backup_offset - si->backup_src_start;
 
 	pfn = paddr_to_pfn(paddr);
-	page_offset = paddr % info->page_size;
 
 	if (pfn >= si->sh_memory->max_mapnr)
 		return FALSE;
