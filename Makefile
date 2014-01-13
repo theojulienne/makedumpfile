@@ -45,7 +45,7 @@ OBJ_PART = print_info.o dwarf_info.o elf_info.o erase_info.o sadump_info.o cache
 SRC_ARCH = arch/arm.c arch/x86.c arch/x86_64.c arch/ia64.c arch/ppc64.c arch/s390x.c arch/ppc.c
 OBJ_ARCH = arch/arm.o arch/x86.o arch/x86_64.o arch/ia64.o arch/ppc64.o arch/s390x.o arch/ppc.o
 
-LIBS = -ldw -lbz2 -ldl -lelf -lz
+LIBS = -ldw -lbz2 -lebl -ldl -lelf -lz
 ifneq ($(LINKTYPE), dynamic)
 LIBS := -static $(LIBS)
 endif
@@ -70,16 +70,24 @@ $(OBJ_ARCH): $(SRC_ARCH)
 
 makedumpfile: $(SRC) $(OBJ_PART) $(OBJ_ARCH)
 	$(CC) $(CFLAGS) $(LDFLAGS) $(OBJ_PART) $(OBJ_ARCH) -rdynamic -o $@ $< $(LIBS)
+	echo .TH MAKEDUMPFILE 8 \"$(DATE)\" \"makedumpfile v$(VERSION)\" \"Linux System Administrator\'s Manual\" > temp.8
+	grep -v "^.TH MAKEDUMPFILE 8" makedumpfile.8 >> temp.8
+	mv temp.8 makedumpfile.8
+	gzip -c ./makedumpfile.8 > ./makedumpfile.8.gz
+	echo .TH MAKEDUMPFILE.CONF 5 \"$(DATE)\" \"makedumpfile v$(VERSION)\" \"Linux System Administrator\'s Manual\" > temp.5
+	grep -v "^.TH MAKEDUMPFILE.CONF 5" makedumpfile.conf.5 >> temp.5
+	mv temp.5 makedumpfile.conf.5
+	gzip -c ./makedumpfile.conf.5 > ./makedumpfile.conf.5.gz
 
 eppic_makedumpfile.so: extension_eppic.c
 	$(CC) $(CFLAGS) -shared -rdynamic -o $@ extension_eppic.c -fPIC -leppic -ltinfo
 
 clean:
-	rm -f $(OBJ) $(OBJ_PART) $(OBJ_ARCH) makedumpfile
+	rm -f $(OBJ) $(OBJ_PART) $(OBJ_ARCH) makedumpfile makedumpfile.8.gz makedumpfile.conf.5.gz
 
 install:
-	install -m 755 -d ${DESTDIR}/usr/bin ${DESTDIR}/usr/share/man/man5 ${DESTDIR}/usr/share/man/man8 ${DESTDIR}/etc
-	install -m 755 -t ${DESTDIR}/usr/bin makedumpfile makedumpfile-R.pl
-	install -m 644 -t ${DESTDIR}/usr/share/man/man8 makedumpfile.8
-	install -m 644 -t ${DESTDIR}/usr/share/man/man5 makedumpfile.conf.5
+	install -m 755 -d ${DESTDIR}/usr/sbin ${DESTDIR}/usr/share/man/man5 ${DESTDIR}/usr/share/man/man8 ${DESTDIR}/etc
+	install -m 755 -t ${DESTDIR}/usr/sbin makedumpfile makedumpfile-R.pl
+	install -m 644 -t ${DESTDIR}/usr/share/man/man8 makedumpfile.8.gz
+	install -m 644 -t ${DESTDIR}/usr/share/man/man5 makedumpfile.conf.5.gz
 	install -m 644 -D makedumpfile.conf ${DESTDIR}/etc/makedumpfile.conf.sample
