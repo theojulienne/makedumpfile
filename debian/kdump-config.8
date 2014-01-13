@@ -121,19 +121,6 @@ or grub
 .I /boot/grub/menu.lst
 file and reboot, before kdump will work.  See installed READMEs for suggestions.
 .\"
-
-.RS 0
-.nf
-.B could not find an installed debug vmlinux image and
-.B DEBUG_KERNEL is not specified in /etc/default/kdump-tools
-.B Warning: makedumpfile will be limited to -d 1.
-.fi
-.RS 
-A debug version of the currently booted kernel could not be
-found.  
-.RE
-.RE
-.\"
 .TP
 .B KDUMP_KERNEL does not exist: $KDUMP_KERNEL
 A KDUMP_KERNEL was specified in 

@@ -46,23 +46,12 @@ may still be required.  Specifically:
 
     You may also want to add 'nmi_watchdog=1' on certain systems.
 
-4. Debug Kernel
-    You *should* have a debug kernel in order for makedumpfile to process
-    the vmcore file.  Without a debug kernel, the transfer process is
-    reduced to using "makedumpfile -d 1".   Options:
-        A)  If /usr/lib/debug/boot/vmlinux-$(uname -r) exists,
-	    kdump-tools will use that kernel.
-        B)  Explicitly set DEBUG_KERNEL in /etc/default/kdump-tools to
-            point to your debug kernel.
-        C)  None of the above.  makedumpfile will still work, but your
-            dumpfile will be larger and take longer to save to disk.
-
-5. Local Configuration
+4. Local Configuration
    The /etc/default/kdump-tools file can be modified to reflect your 
    setup, if automatic detection fails, or if you need specific
    architectural settings.
 
-6. Architectural considerations
+5. Architectural considerations
    A) x86 && PAE && memory > 4 Gigabytes 
       will need to use KDUMP_KEXEC_ARGS="--elf64-core-headers"
 

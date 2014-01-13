@@ -87,12 +87,6 @@ If not set, no special action is taken.
 .\" 
 .\"
 .TP
-.B DEBUG_KERNEL
-A debug version of the running kernel.  If not set, 
-.B kdump-config 
-will use /usr/lib/debug/vmlinux-$(uname-r) if it exists.  Otherwise, kdump
-will still work, but the dump will take longer and will be much larger.
-.TP
 .B MAKEDUMP_ARGS
 Extra arguments passed to 
 .BR makedumpfile (8).
@@ -230,28 +224,6 @@ variable to point to the provided kernel and its initrd.
 
 The kdump kernel must be configured with:
 .B CONFIG_CRASH_DUMP=y
-.\"
-.\"
-.IP 3. 
-.B Debug Kernel
-\- An uncompressed debug kernel
-.I should 
-be provided in order for makedumpfile to process the vmcore file.  
-Without a debug kernel, the transfer process is reduced to using 
-.RI \*(lq "makedumpfile -c -d 1" \*(rq.
-If
-.I /usr/lib/debug/vmlinux-$(uname -r)
-exists,
-.B kdump-tools
-will automatically use that kernel.
-
-Otherwise, A) set
-.B DEBUG_KERNEL 
-in 
-.I /etc/default/kdump-tools 
-to point to a debug version of the currently booted kernel or 
-B) do without - makedumpfile will still work, but the dumpfile will be larger 
-and take longer to save to disk.
 .\"
 .\" # ---------------------------------------------------------------------------
 .\"

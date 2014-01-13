@@ -40,14 +40,9 @@ KDUMP_COREDIR="/var/crash"
 
 # ---------------------------------------------------------------------------
 # Makedumpfile options:
-# DEBUG_KERNEL - a debug version of the running kernel.  If not set, 
-#     kdump-config will use /usr/lib/debug/vmlinux-$(uname -r) if it is
-#     available.  If it is not available, makedumpfile will be limited to
-#     dumping all pages in memory.
 # MAKEDUMP_ARGS - extra arguments passed to makedumpfile (8).  The default,
 #     if unset, is to pass '-c -d 31' telling makedumpfile to use compression
 #     and reduce the corefile to in-use kernel pages only.
-#DEBUG_KERNEL=
 #MAKEDUMP_ARGS="-c -d 31"
 
 
