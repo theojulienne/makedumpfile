@@ -309,10 +309,11 @@ function kdump_unload()
 # Sets: KDUMP_STAMPDIR, KDUMP_COREFILE
 function kdump_save_core()
 {
-	KDUMP_STAMPDIR="$KDUMP_COREDIR/"`date +"%Y%m%d%H%M"`
+	KDUMP_STAMP=`date +"%Y%m%d%H%M"`
+	KDUMP_STAMPDIR="$KDUMP_COREDIR/$KDUMP_STAMP"
 	KDUMP_CORETEMP="$KDUMP_STAMPDIR/dump-incomplete"
-	KDUMP_COREFILE="$KDUMP_STAMPDIR/dump."`date +"%Y%m%d%H%M"`
-	KDUMP_DMESGFILE="$KDUMP_STAMPDIR/dmesg."`date +"%Y%m%d%H%M"`
+	KDUMP_COREFILE="$KDUMP_STAMPDIR/dump.$KDUMP_STAMP"
+	KDUMP_DMESGFILE="$KDUMP_STAMPDIR/dmesg.$KDUMP_STAMP"
 
 	mkdir -p $KDUMP_STAMPDIR
 
@@ -322,7 +323,7 @@ function kdump_save_core()
 		log_failure_msg "$NAME: makedumpfile failed, falling back to 'cp'"
 		logger -t $NAME "makedumpfile failed, falling back to 'cp'"
 		KDUMP_CORETEMP="$KDUMP_STAMPDIR/vmcore-incomplete"
-		KDUMP_COREFILE="$KDUMP_STAMPDIR/vmcore."`date +"%Y%m%d%H%M"`
+		KDUMP_COREFILE="$KDUMP_STAMPDIR/vmcore.$KDUMP_STAMP"
 		cp $vmcore_file $KDUMP_CORETEMP
 	fi
 
