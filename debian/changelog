@@ -1,3 +1,16 @@
+makedumpfile (1.5.5-2) unstable; urgency=low
+
+  * Drop debug kernel requirement from kdump-config
+
+    [Konstantin Khlebnikov]
+    Starting from 2.6.24 kernel provides vmcoreinfo right in vmcore,
+    so makedumpfile can produce filtered dumps without vmlinux or slecial vmcoreinfo.
+    Closes: #638849
+
+  * debian/kdump-config : Define Timestamp only once in variable and reuse
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Wed, 15 Jan 2014 10:29:34 +0100
+
 makedumpfile (1.5.5-1) unstable; urgency=low
 
   [ Louis Bouchard ]
