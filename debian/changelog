@@ -1,3 +1,13 @@
+makedumpfile (1.5.6-1) unstable; urgency=medium
+
+  [ Louis Bouchard ]
+  * New upstream version
+
+  * Add x32 armel armhf and ppa64el to Achitecture to close the delta with
+    Ubuntu
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Tue, 29 Apr 2014 16:07:03 +0200
+
 makedumpfile (1.5.5-2) unstable; urgency=low
 
   * Drop debug kernel requirement from kdump-config
