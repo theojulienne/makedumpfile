@@ -434,7 +434,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 11, 3)/* linux-3.11.3 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 13, 6)/* linux-3.13.6 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -1056,8 +1056,6 @@ struct DumpInfo {
 	 */
 	char               *partial_bitmap1;
 	char               *partial_bitmap2;
-	unsigned long long cyclic_start_pfn;
-	unsigned long long cyclic_end_pfn;  
 	unsigned long long num_dumpable;
 	unsigned long      bufsize_cyclic;
 	unsigned long      pfn_cyclic;
@@ -1590,8 +1588,13 @@ int get_xen_info_ia64(void);
 #define get_xen_info_arch(X) FALSE
 #endif	/* s390x */
 
+struct cycle {
+	unsigned long long start_pfn;
+	unsigned long long end_pfn;
+};
+
 static inline int
-is_on(char *bitmap, int i)
+is_on(char *bitmap, unsigned long long i)
 {
 	return bitmap[i>>3] & (1 << (i & 7));
 }
@@ -1613,18 +1616,18 @@ is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
 }
 
 static inline int
-is_dumpable_cyclic(char *bitmap, unsigned long long pfn)
+is_dumpable_cyclic(char *bitmap, unsigned long long pfn, struct cycle *cycle)
 {
-	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
 		return FALSE;
 	else
-		return is_on(bitmap, pfn - info->cyclic_start_pfn);
+		return is_on(bitmap, pfn - cycle->start_pfn);
 }
 
 static inline int
-is_cyclic_region(unsigned long long pfn)
+is_cyclic_region(unsigned long long pfn, struct cycle *cycle)
 {
-	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
 		return FALSE;
 	else
 		return TRUE;
@@ -1634,16 +1637,18 @@ static inline int
 is_zero_page(unsigned char *buf, long page_size)
 {
 	size_t i;
+	unsigned long long *vect = (unsigned long long *) buf;
+	long page_len = page_size / sizeof(unsigned long long);
 
-	for (i = 0; i < page_size; i++)
-		if (buf[i])
+	for (i = 0; i < page_len; i++)
+		if (vect[i])
 			return FALSE;
 	return TRUE;
 }
 
 void write_vmcoreinfo_data(void);
-int set_bit_on_1st_bitmap(unsigned long long pfn);
-int clear_bit_on_1st_bitmap(unsigned long long pfn);
+int set_bit_on_1st_bitmap(unsigned long long pfn, struct cycle *cycle);
+int clear_bit_on_1st_bitmap(unsigned long long pfn, struct cycle *cycle);
 
 #ifdef __x86__
 

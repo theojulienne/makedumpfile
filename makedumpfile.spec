@@ -1,6 +1,6 @@
 Name: makedumpfile
 Summary: makedumpfile package
-Version: 1.5.5
+Version: 1.5.6
 Release: 1
 Group: Applications/Text
 License: GPL
@@ -28,6 +28,7 @@ mkdir -p %{buildroot}/usr/sbin
 mkdir -p %{buildroot}/etc
 mkdir -p %{buildroot}/usr/share/man/man5
 mkdir -p %{buildroot}/usr/share/man/man8
+mkdir -p %{buildroot}/usr/share/%{name}-%{version}/eppic-scripts/
 make install DESTDIR=%{buildroot}
 
 %clean
@@ -39,6 +40,7 @@ rm -rf %{buildroot}
 /usr/sbin/makedumpfile-R.pl
 /usr/share/man/man5/makedumpfile.conf.5.gz
 /usr/share/man/man8/makedumpfile.8.gz
+/usr/share/%{name}-%{version}/eppic_scripts/
 
 %changelog
 * Wed Dec 18 2013 Atsushi Kumagai <kumagai-atsushi@mxc.nes.nec.co.jp>
