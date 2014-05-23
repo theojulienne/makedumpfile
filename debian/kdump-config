@@ -44,6 +44,7 @@ ARCH=`uname -m`
 # Set up defaults
 KDUMP_SYSCTL=${KDUMP_SYSCTL:="kernel.panic_on_oops=1"}
 KDUMP_COREDIR=${KDUMP_COREDIR:=/var/crash}
+KDUMP_DUMP_DMESG=${KDUMP_DUMP_DMESG:=1}
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
 KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll maxcpus=1 nousb"}
 [ -d $KDUMP_COREDIR ] || mkdir -p $KDUMP_COREDIR ;
@@ -337,23 +338,26 @@ function kdump_save_core()
 		logger -t $NAME "failed to save vmcore in $KDUMP_STAMPDIR"
 	fi
 
-	log_action_msg "running makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE"
-	makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE
-	ERROR=$?
-	if [ $ERROR -ne 0 ] ; then
-		log_failure_msg "$NAME: makedumpfile --dump-dmesg failed. dmesg content will be unavailable"
-		logger -t $NAME "makedumpfile --dump-dmesg failed. dmesg content will be unavailable"
-	fi
+	# dump the dmesg buffer
+	if [ $KDUMP_DUMP_DMESG -eq 1 ] ; then
+		log_action_msg "running makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE"
+		makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE
+		ERROR=$?
+		if [ $ERROR -ne 0 ] ; then
+			log_failure_msg "$NAME: makedumpfile --dump-dmesg failed. dmesg content will be unavailable"
+			logger -t $NAME "makedumpfile --dump-dmesg failed. dmesg content will be unavailable"
+		fi
 
-	# did we succeed?
-	if [ $ERROR == 0 ]; then
-		log_success_msg "$NAME: saved dmesg content in $KDUMP_STAMPDIR"
-		logger -t $NAME "saved dmesg content in $KDUMP_STAMPDIR"
-		return 0;
-	else
-		log_failure_msg "$NAME: failed to save dmesg content in $KDUMP_STAMPDIR"
-		logger -t $NAME "failed to save dmesg content in $KDUMP_STAMPDIR"
-		return 1;
+		# did we succeed?
+		if [ $ERROR == 0 ]; then
+			log_success_msg "$NAME: saved dmesg content in $KDUMP_STAMPDIR"
+			logger -t $NAME "saved dmesg content in $KDUMP_STAMPDIR"
+			return 0;
+		else
+			log_failure_msg "$NAME: failed to save dmesg content in $KDUMP_STAMPDIR"
+			logger -t $NAME "failed to save dmesg content in $KDUMP_STAMPDIR"
+			return 1;
+		fi
 	fi
 }
 
