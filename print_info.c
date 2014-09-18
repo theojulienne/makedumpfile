@@ -89,6 +89,9 @@ print_usage(void)
 	MSG("  Creating DUMPFILE of Xen:\n");
 	MSG("  # makedumpfile -E [--xen-syms XEN-SYMS|--xen-vmcoreinfo VMCOREINFO] VMCORE DUMPFILE\n");
 	MSG("\n");
+	MSG("  Filtering domain-0 of Xen:\n");
+	MSG("  # makedumpfile -E -d DL -x vmlinux VMCORE DUMPFILE\n");
+	MSG("\n");
 	MSG("  Generating VMCOREINFO of Xen:\n");
 	MSG("  # makedumpfile -g VMCOREINFO --xen-syms XEN-SYMS\n");
 	MSG("\n");
@@ -111,7 +114,7 @@ print_usage(void)
 	MSG("      marked in the following table is excluded. A user can specify multiple\n");
 	MSG("      page types by setting the sum of each page type for Dump_Level (DL).\n");
 	MSG("      The maximum of Dump_Level is 31.\n");
-	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1.\n");
+	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1 except on x86_64\n");
 	MSG("\n");
 	MSG("            |         cache    cache\n");
 	MSG("      Dump  |  zero   without  with     user    free\n");
@@ -191,7 +194,6 @@ print_usage(void)
 	MSG("\n");
 	MSG("  [--cyclic-buffer BUFFER_SIZE]:\n");
 	MSG("      Specify the buffer size in kilo bytes for analysis in the cyclic mode.\n");
-	MSG("      Actually, the double of BUFFER_SIZE kilo bytes will be allocated in memory.\n");
 	MSG("      In the cyclic mode, the number of cycles is represented as:\n");
 	MSG("\n");
 	MSG("          num_of_cycles = system_memory / \n");
@@ -264,6 +266,15 @@ print_usage(void)
 	MSG("      extracts the dmesg log from a VMCORE and writes it to the specified\n");
 	MSG("      LOGFILE. If a VMCORE does not contain VMCOREINFO for dmesg, it is\n");
 	MSG("      necessary to specfiy [-x VMLINUX] or [-i VMCOREINFO].\n");
+	MSG("\n");
+	MSG("  [--mem-usage]:\n");
+	MSG("      This option is only for x86_64.\n");
+	MSG("      This option is used to show the page numbers of current system in different\n");
+	MSG("      use. It should be executed in 1st kernel. By the help of this, user can know\n");
+	MSG("      how many pages is dumpable when different dump_level is specified. It analyzes\n");
+	MSG("      the 'System Ram' and 'kernel text' program segment of /proc/kcore excluding\n");
+	MSG("      the crashkernel range, then calculates the page number of different kind per\n");
+	MSG("      vmcoreinfo. So currently /proc/kcore need be specified explicitly.\n");
 	MSG("\n");
 	MSG("  [-D]:\n");
 	MSG("      Print debugging message.\n");

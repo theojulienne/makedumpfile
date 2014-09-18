@@ -1,7 +1,7 @@
 # makedumpfile
 
-VERSION=1.5.6
-DATE=23 Apr 2014
+VERSION=1.5.7
+DATE=18 Sep 2014
 
 # Honour the environment variable CC
 ifeq ($(strip $CC),)
@@ -87,7 +87,7 @@ makedumpfile: $(SRC_BASE) $(OBJ_PART) $(OBJ_ARCH)
 	gzip -c ./makedumpfile.conf.5 > ./makedumpfile.conf.5.gz
 
 eppic_makedumpfile.so: extension_eppic.c
-	$(CC) $(CFLAGS) -shared -rdynamic -o $@ extension_eppic.c -fPIC -leppic -ltinfo
+	$(CC) $(CFLAGS) $(LDFLAGS) -shared -rdynamic -o $@ extension_eppic.c -fPIC -leppic -ltinfo
 
 clean:
 	rm -f $(OBJ) $(OBJ_PART) $(OBJ_ARCH) makedumpfile makedumpfile.8.gz makedumpfile.conf.5.gz
