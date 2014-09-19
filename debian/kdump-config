@@ -154,7 +154,7 @@ function check_kdump_support()
 		[ ! $DRY_RUN ] && exit 1;
 	fi
         if [ -n "$NFS" ] && [ -n "$SSH" ];then
-		log_failure_msg "\$SSH and \$NFS cannot be define concurrently"
+		log_failure_msg "\$SSH and \$NFS cannot be defined concurrently"
 		[ ! $DRY_RUN ] && exit 1;
 	fi
 }
@@ -166,7 +166,7 @@ function check_kdump_support()
 #          1 otherwise.
 function check_relocatable()
 {
-	if [ $ARCH = "ia64" ]; then
+	if [ "$ARCH" = "ia64" ]; then
 		# Linux is always relocatable on ia64
 		return 0
 	elif grep -q 'CONFIG_RELOCATABLE=y' $1; then
@@ -225,7 +225,7 @@ function locate_kdump_kernel()
 	else
 		KDUMP_ADDR=`grep CONFIG_PHYSICAL_START $KDUMP_CONFIG | sed "s/CONFIG_PHYSICAL_START=//"`
 		# compare the two
-		if [ $KDUMP_ADDR != $IOMEM_ADDR ] ; then
+		if [ "$KDUMP_ADDR" != "$IOMEM_ADDR" ] ; then
 			log_failure_msg "kdump kernel relocation address does not match crashkernel parameter"
 	        [ ! $DRY_RUN ] && exit 1;
 			return 1;
@@ -253,7 +253,7 @@ function kdump_load()
 	# Different kernel types allow/require different options:
 	# The only special case here is that x86, x86_64 elf style
 	# binaries require the --args-linux argument.
-	if [ $ARCH != "ia64" ] ; then
+	if [ "$ARCH" != "ia64" ] ; then
 		ELF_TST=`file $KDUMP_KERNEL | grep ELF`
 		if [ -n "$ELF_TST" ] ; then
 			KEXEC_CMD="$KEXEC_CMD --args-linux"
@@ -329,11 +329,11 @@ function define_stampdir()
 
 	if [ -z "$SSH" ] && [ -z "$NFS" ]; then
 		echo "$KDUMP_COREDIR/$STAMP"
-	elif [ $HOSTTAG = "hostname" ];then
+	elif [ "$HOSTTAG" = "hostname" ];then
 		echo "$KDUMP_COREDIR/$(hostname)-$STAMP"
 	else
 		THIS_HOST="$(hostname -I)"
-		set -a $THIS_HOST
+		set -- $THIS_HOST
 		THIS_HOST=$1
 		echo "$KDUMP_COREDIR/$THIS_HOST-$STAMP"
 	fi
@@ -414,7 +414,7 @@ function kdump_save_core()
 	fi
 
 	# dump the dmesg buffer
-	if [ $KDUMP_DUMP_DMESG -eq 1 ] ; then
+	if [ "$KDUMP_DUMP_DMESG" -eq 1 ] ; then
             log_action_msg "running makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE"
             makedumpfile --dump-dmesg $vmcore_file $KDUMP_DMESGFILE
             ERROR=$?
@@ -499,7 +499,7 @@ function kdump_save_core_to_ssh()
 	fi
 
 	# dump the dmesg buffer
-        if [ $KDUMP_DUMP_DMESG -eq 1 ] ; then
+        if [ "$KDUMP_DUMP_DMESG" -eq 1 ] ; then
 	    log_action_msg "running makedumpfile --dump-dmesg $vmcore_file $KDUMP_TMPDMESG"
 	    makedumpfile --dump-dmesg $vmcore_file $KDUMP_TMPDMESG
 	    ERROR=$?
@@ -531,14 +531,14 @@ function kdump_propagate()
 
 	# ssh key propagation is only needed
 	# if remote ssh dump is configured
-	if [ -z $KDUMP_REMOTE_HOST ];then
+	if [ -z "$KDUMP_REMOTE_HOST" ];then
 		log_failure_msg "$NAME: Remote ssh dump is not configured. No reason to propagate"
 		logger -t $NAME "Remote ssh dump is not configured. No reason to propagate"
 		return 1;
 	fi
 
 	# Verify if the provided key exists and create it if needed
-	if [ -f $KDUMP_SSH_KEY ];then
+	if [ -f "$KDUMP_SSH_KEY" ];then
 		echo "Using existing key $KDUMP_SSH_KEY"
 	else
 		echo "Need to generate a new ssh key..."
