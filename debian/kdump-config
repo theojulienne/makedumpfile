@@ -469,6 +469,8 @@ function kdump_save_core_to_ssh()
 		return 1
 	fi
 
+	# Add '-F' [flatten] to MAKEDUMP_ARGS, if not there:
+	[ "${MAKEDUMP_ARGS#-F*}" != "${MAKEDUMP_ARGS}" ] || MAKEDUMP_ARGS="${MAKEDUMP_ARGS} -F"
 	log_action_msg "sending makedumpfile $MAKEDUMP_ARGS $vmcore_file to $KDUMP_REMOTE_HOST : $KDUMP_CORETEMP"
 	makedumpfile $MAKEDUMP_ARGS $vmcore_file | ssh -i $KDUMP_SSH_KEY $KDUMP_REMOTE_HOST dd of=$KDUMP_CORETEMP
 	ERROR=$?
