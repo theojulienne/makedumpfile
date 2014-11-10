@@ -1,3 +1,11 @@
+makedumpfile (1.5.7-2) unstable; urgency=medium
+
+  [Lee Schermerhorn]
+  * Add '-F' [flatten] to makedumpefile args for remote kdump vi ssh.
+    Closes: #768317
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Mon, 10 Nov 2014 16:51:04 +0100
+
 makedumpfile (1.5.7-1) unstable; urgency=medium
 
   * New upstream version includes :
