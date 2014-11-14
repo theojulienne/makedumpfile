@@ -1,3 +1,11 @@
+makedumpfile (1.5.7-3) unstable; urgency=medium
+
+  [Mauricio Faria de Oliveira <mauricfo@linux.vnet.ibm.com>]
+  * Add possibility to find vmlinux for ppc64el arch
+    Closes: #763688
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Fri, 14 Nov 2014 15:56:15 +0100
+
 makedumpfile (1.5.7-2) unstable; urgency=medium
 
   [Lee Schermerhorn]
