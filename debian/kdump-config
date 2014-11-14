@@ -205,7 +205,13 @@ function locate_kdump_kernel()
 	# 2: The currently running kernel may be relocatable.  If so, then
 	#    use the currently running kernel as the crash kernel.
 	if check_relocatable /boot/config-$KVER; then
-		KDUMP_KERNEL=/boot/vmlinuz-$KVER
+		if [ -f /boot/vmlinuz-$KVER ]; then
+			KDUMP_KERNEL=/boot/vmlinuz-$KVER
+		elif [ -f /boot/vmlinux-$KVER ]; then
+			KDUMP_KERNEL=/boot/vmlinux-$KVER
+		else
+			KDUMP_KERNEL=
+		fi
 		if [ -f /boot/initrd.img-$KVER ]; then
 			KDUMP_INITRD=/boot/initrd.img-$KVER
 		else
