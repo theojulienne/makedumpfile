@@ -1,0 +1,11 @@
+[Unit]
+Description=Kernel crash dump capture sequence
+#Before=default.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/etc/start/kdump-tools start
+#ExecStop=/etc/start/kdump-tools stop
+ExecReload=/etc/start/kdump-tools force-reload
+
+[Install]
