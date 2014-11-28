@@ -3,8 +3,12 @@ Description=Kernel crash dump capture sequence
 Wants=network-online.target
 
 [Service]
+Type=oneshot
+StandardOutput=syslog+console
+EnvironmentFile=/etc/default/kdump-tools
 ExecStart=/etc/start/kdump-tools start
-#ExecStop=/etc/start/kdump-tools stop
-ExecReload=/etc/start/kdump-tools force-reload
+ExecStop=/etc/start/kdump-tools stop
+RemainAfterExit=yes
 
 [Install]
+WantedBy=default.target
