@@ -414,6 +414,7 @@ function kdump_save_core()
 		mv $KDUMP_CORETEMP $KDUMP_COREFILE
 		log_success_msg "$NAME: saved vmcore in $KDUMP_STAMPDIR"
 		logger -t $NAME "saved vmcore in $KDUMP_STAMPDIR"
+		sync
 	else
 		log_failure_msg "$NAME: failed to save vmcore in $KDUMP_STAMPDIR"
 		logger -t $NAME "failed to save vmcore in $KDUMP_STAMPDIR"
@@ -500,6 +501,7 @@ function kdump_save_core_to_ssh()
 	if [ $ERROR -ne 0 ]; then
 		log_failure_msg "$NAME: failed to save vmcore in $KDUMP_REMOTE_HOST:$KDUMP_STAMPDIR"
 		logger -t $NAME "failed to save vmcore in $KDUMP_REMOTE_HOST:$KDUMP_STAMPDIR"
+		sync
 	else
 		ssh -i $KDUMP_SSH_KEY $KDUMP_REMOTE_HOST mv $KDUMP_CORETEMP $KDUMP_COREFILE
 		log_success_msg "$NAME: saved vmcore in $KDUMP_REMOTE_HOST:$KDUMP_STAMPDIR"
