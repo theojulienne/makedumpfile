@@ -1,6 +1,5 @@
 [Unit]
 Description=Kernel crash dump capture sequence
-#Before=default.target
 Wants=network-online.target
 
 [Service]
