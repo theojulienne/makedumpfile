@@ -1,13 +1,13 @@
 [Unit]
-Description=Kernel crash dump capture sequence
+Description=Kernel crash dump capture service
 Wants=network-online.target
 
 [Service]
 Type=oneshot
 StandardOutput=syslog+console
 EnvironmentFile=/etc/default/kdump-tools
-ExecStart=/etc/start/kdump-tools start
-ExecStop=/etc/start/kdump-tools stop
+ExecStart=/etc/init.d/kdump-tools start
+ExecStop=/etc/init.d/kdump-tools stop
 RemainAfterExit=yes
 
 [Install]
