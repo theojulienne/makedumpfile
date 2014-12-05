@@ -434,6 +434,7 @@ function kdump_save_core()
 	    if [ $ERROR == 0 ]; then
 		log_success_msg "$NAME: saved dmesg content in $KDUMP_STAMPDIR"
 		logger -t $NAME "saved dmesg content in $KDUMP_STAMPDIR"
+		sync
 	    else
 		log_failure_msg "$NAME: failed to save dmesg content in $KDUMP_STAMPDIR"
 		logger -t $NAME "failed to save dmesg content in $KDUMP_STAMPDIR"
