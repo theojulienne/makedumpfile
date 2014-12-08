@@ -1,3 +1,9 @@
+makedumpfile (1:1.5.7-4) experimental; urgency=medium
+
+  * Enable kdump-tools to work as a systemd service
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Thu, 04 Dec 2014 17:45:43 +0100
+
 makedumpfile (1.5.7-3) unstable; urgency=medium
 
   [Mauricio Faria de Oliveira <mauricfo@linux.vnet.ibm.com>]
