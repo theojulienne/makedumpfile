@@ -47,6 +47,7 @@ KDUMP_SYSCTL=${KDUMP_SYSCTL:="kernel.panic_on_oops=1"}
 KDUMP_COREDIR=${KDUMP_COREDIR:=/var/crash}
 KDUMP_DUMP_DMESG=${KDUMP_DUMP_DMESG:=1}
 KDUMP_DIR="/var/lib/kdump"
+KDUMP_NUM_DUMPS=${KDUMP_NUM_DUMPS:=0}
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
 KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll maxcpus=1 nousb systemd.unit=kdump-tools.service"}
 KDUMP_KERNEL_HOOK="/etc/kernel/postinst.d/kdump-tools"
@@ -652,6 +653,18 @@ function kdump_save_core()
 		logger -t $NAME "failed to save dmesg content in $KDUMP_STAMPDIR"
 	    fi
 	fi
+
+	# limit the number of dumps kept on the local machine
+	if [ -z "${NFS}" -a $ERROR == 0 -a $KDUMP_NUM_DUMPS -gt 0 ] ; then
+		num_dumps=$(ls -1dv $KDUMP_COREDIR/2* | wc -l)
+		if [ $num_dumps -gt $KDUMP_NUM_DUMPS ] ; then
+			purge_num=$((num_dumps - KDUMP_NUM_DUMPS))
+			purge_dir=$(ls -1dv $KDUMP_COREDIR/2* | head -$purge_num | tr "\n" " ")
+			logger -t $NAME "Too many dumps, purging: $purge_dir"
+			rm -rf $purge_dir
+		fi
+	fi
+
 	# If we use NFS, umount the remote FS
 	#
 	if [ -n "$NFS" ];then
