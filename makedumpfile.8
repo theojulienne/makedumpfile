@@ -1,4 +1,4 @@
-.TH MAKEDUMPFILE 8 "18 Sep 2014" "makedumpfile v1.5.7" "Linux System Administrator's Manual"
+.TH MAKEDUMPFILE 8 "25 Mar 2015" "makedumpfile v1.5.8" "Linux System Administrator's Manual"
 .SH NAME
 makedumpfile \- make a small dumpfile of kdump
 .SH SYNOPSIS
@@ -45,9 +45,9 @@ be excluded.
 .br
 .B \- Pages filled with zero
 .br
-.B \- Cache pages without private pages
+.B \- Cache pages without private flag (non-private cache)
 .br
-.B \- All cache pages with private pages
+.B \- Cache pages with private flag (private cache)
 .br
 .B \- User process data pages
 .br
@@ -164,10 +164,26 @@ by dump_level 11, makedumpfile retries it by dump_level 31.
 # makedumpfile \-d 11 \-x vmlinux /proc/vmcore dumpfile
 .br
 # makedumpfile \-d 11,31 \-x vmlinux /proc/vmcore dumpfile
+.br
+.B Base level:
+.br
+dump_level consists of five bits, so there are five base levels to specify the type of unnecessary page.
+.br
+	\fB 1\fR :	Exclude the pages filled with zero.
+.br
+	\fB 2\fR :	Exclude the non-private cache pages.
+.br
+	\fB 4\fR :	Exclude all cache pages.
+.br
+	\fB 8\fR :	Exclude the user process data pages.
+.br
+	\fB16\fR :	Exclude the free pages.
 
-       |      |cache  |cache  |      |
-  dump | zero |without|with   | user | free
- level | page |private|private| data | page
+Here is the all combinations of the bits.
+
+       |      |non-   |       |      |
+  dump | zero |private|private| user | free
+ level | page |cache  |cache  | data | page
 .br
 \-\-\-\-\-\-\-+\-\-\-\-\-\-+\-\-\-\-\-\-\-+\-\-\-\-\-\-\-+\-\-\-\-\-\-+\-\-\-\-\-\-
      0 |      |       |       |      |
@@ -384,6 +400,16 @@ size, so ordinary users don't need to specify this option.
 .B Example:
 .br
 # makedumpfile \-\-cyclic\-buffer 1024 \-d 31 \-x vmlinux /proc/vmcore dumpfile
+
+.TP
+\fB\-\-splitblock\-size\fR \fIsplitblock_size\fR
+Specify the splitblock size in kilo bytes for analysis in the cyclic mode with --split.
+If --splitblock N is specified, difference of each splitted dumpfile size is at most N
+kilo bytes.
+.br
+.B Example:
+.br
+# makedumpfile \-\-splitblock\-size 1024 \-d 31 \-x vmlinux \-\-split /proc/vmcore dumpfile1 dumpfile2
 
 .TP
 \fB\-\-non\-cyclic\fR

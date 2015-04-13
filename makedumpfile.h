@@ -441,7 +441,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 16, 1)/* linux-3.16.1 */
+#define LATEST_VERSION		KERNEL_VERSION(3, 19, 0)/* linux-3.19.0 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -549,7 +549,9 @@ do { \
 #define VMEMMAP_END_2_6_31	(0xffffeaffffffffff) /* 2.6.31, or later  */
 
 #define __START_KERNEL_map	(0xffffffff80000000)
-#define MODULES_VADDR		(0xffffffff88000000)
+#define KERNEL_IMAGE_SIZE_ORIG		(0x0000000008000000) /* 2.6.25, or former */
+#define KERNEL_IMAGE_SIZE_2_6_26	(0x0000000020000000) /* 2.6.26, or later  */
+#define MODULES_VADDR          (__START_KERNEL_map + NUMBER(KERNEL_IMAGE_SIZE))
 #define MODULES_END		(0xfffffffffff00000)
 #define KVBASE			PAGE_OFFSET
 #define _SECTION_SIZE_BITS	(27)
@@ -757,26 +759,28 @@ do { \
 /*
  * The function of dependence on machine
  */
+static inline int stub_true() { return TRUE; }
+static inline int stub_true_ul(unsigned long x) { return TRUE; }
 #ifdef __arm__
 int get_phys_base_arm(void);
 int get_machdep_info_arm(void);
 unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
 #define get_phys_base()		get_phys_base_arm()
 #define get_machdep_info()	get_machdep_info_arm()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_arm(X)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif /* arm */
 
 #ifdef __x86__
 int get_machdep_info_x86(void);
 int get_versiondep_info_x86(void);
 unsigned long long vaddr_to_paddr_x86(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_x86()
 #define get_versiondep_info()	get_versiondep_info_x86()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86(X)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif /* x86 */
 
 #ifdef __x86_64__
@@ -789,38 +793,39 @@ unsigned long long vaddr_to_paddr_x86_64(unsigned long vaddr);
 #define get_machdep_info()	get_machdep_info_x86_64()
 #define get_versiondep_info()	get_versiondep_info_x86_64()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86_64(X)
-#define is_vmalloc_addr(X)	is_vmalloc_addr_x86_64(X)
+#define is_phys_addr(X)		(!is_vmalloc_addr_x86_64(X))
 #endif /* x86_64 */
 
 #ifdef __powerpc64__ /* powerpc64 */
 int get_machdep_info_ppc64(void);
 int get_versiondep_info_ppc64(void);
 unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc64()
 #define get_versiondep_info()	get_versiondep_info_ppc64()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc64 */
 
 #ifdef __powerpc32__ /* powerpc32 */
 int get_machdep_info_ppc(void);
 unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc(X)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc32 */
 
 #ifdef __s390x__ /* s390x */
 int get_machdep_info_s390x(void);
 unsigned long long vaddr_to_paddr_s390x(unsigned long vaddr);
-#define get_phys_base()		TRUE
+int is_iomem_phys_addr_s390x(unsigned long addr);
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_s390x()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_s390x(X)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		is_iomem_phys_addr_s390x(X)
 #endif          /* s390x */
 
 #ifdef __ia64__ /* ia64 */
@@ -829,10 +834,10 @@ int get_machdep_info_ia64(void);
 unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define get_machdep_info()	get_machdep_info_ia64()
 #define get_phys_base()		get_phys_base_ia64()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ia64(X)
 #define VADDR_REGION(X)		(((unsigned long)(X)) >> REGION_SHIFT)
-#define is_vmalloc_addr(X)	TRUE
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* ia64 */
 
 typedef unsigned long long mdf_pfn_t;
@@ -1168,8 +1173,24 @@ struct DumpInfo {
 	 */
 	int (*page_is_buddy)(unsigned long flags, unsigned int _mapcount,
 			     unsigned long private, unsigned int _count);
+	/*
+	 * for cyclic_splitting mode, setup splitblock_size
+	 */
+	long long splitblock_size;
 };
 extern struct DumpInfo		*info;
+
+/*
+ * for cyclic_splitting mode,Manage memory by splitblock
+ */
+#define DEFAULT_SPLITBLOCK_SIZE (1LL << 30)
+
+struct SplitBlock {
+	char *table;
+	long long num;
+	long long page_per_splitblock;
+	int entry_size;                 /* counted by byte */
+};
 
 /*
  * kernel VM-related data
@@ -1531,6 +1552,7 @@ struct number_table {
 	long    PG_hwpoison;
 
 	long	PAGE_BUDDY_MAPCOUNT_VALUE;
+	long	KERNEL_IMAGE_SIZE;
 	long	SECTION_SIZE_BITS;
 	long	MAX_PHYSMEM_BITS;
 };
@@ -1567,6 +1589,11 @@ int read_disk_dump_header(struct disk_dump_header *dh, char *filename);
 int read_kdump_sub_header(struct kdump_sub_header *kh, char *filename);
 void close_vmcoreinfo(void);
 int close_files_for_creating_dumpfile(void);
+int iomem_for_each_line(char *match, int (*callback)(void *data, int nr,
+						     char *str,
+						     unsigned long base,
+						     unsigned long length),
+			void *data);
 
 
 /*
@@ -1869,14 +1896,17 @@ struct elf_prstatus {
 #define OPT_EPPIC               OPT_START+12
 #define OPT_NON_MMAP            OPT_START+13
 #define OPT_MEM_USAGE            OPT_START+14
+#define OPT_SPLITBLOCK_SIZE	OPT_START+15
 
 /*
  * Function Prototype.
  */
 mdf_pfn_t get_num_dumpable_cyclic(void);
+mdf_pfn_t get_num_dumpable_cyclic_withsplit(void);
 int get_loads_dumpfile_cyclic(void);
 int initial_xen(void);
 unsigned long long get_free_memory_size(void);
 int calculate_cyclic_buffer_size(void);
+int prepare_splitblock_table(void);
 
 #endif /* MAKEDUMPFILE_H */

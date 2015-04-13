@@ -116,9 +116,9 @@ print_usage(void)
 	MSG("      The maximum of Dump_Level is 31.\n");
 	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1 except on x86_64\n");
 	MSG("\n");
-	MSG("            |         cache    cache\n");
-	MSG("      Dump  |  zero   without  with     user    free\n");
-	MSG("      Level |  page   private  private  data    page\n");
+	MSG("            |         non-\n");
+	MSG("      Dump  |  zero   private  private  user    free\n");
+	MSG("      Level |  page   cache    cache    data    page\n");
 	MSG("     -------+---------------------------------------\n");
 	MSG("         0  |\n");
 	MSG("         1  |   X\n");
@@ -202,6 +202,11 @@ print_usage(void)
 	MSG("      The lesser number of cycles, the faster working speed is expected.\n");
 	MSG("      By default, BUFFER_SIZE will be calculated automatically depending on\n");
 	MSG("      system memory size, so ordinary users don't need to specify this option.\n");
+	MSG("\n");
+	MSG("  [--splitblock-size SPLITBLOCK_SIZE]:\n");
+	MSG("      Specify the splitblock size in kilo bytes for analysis in the cyclic mode\n");
+	MSG("      with --split. If --splitblock N is specified, difference of each splitted\n");
+	MSG("      dumpfile size is at most N kilo bytes.\n");
 	MSG("\n");
 	MSG("  [--non-cyclic]:\n");
 	MSG("      Running in the non-cyclic mode, this mode uses the old filtering logic\n");
