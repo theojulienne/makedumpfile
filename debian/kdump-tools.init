@@ -27,6 +27,9 @@ KDUMP_DEFAULTS=/etc/default/kdump-tools
 
 case "$1" in
   start)
+	if init_is_upstart; then
+            exit 1
+        fi
 	#
 	# If we have a /proc/vmcore, then we just kdump'ed
 	#
@@ -48,6 +51,9 @@ case "$1" in
 	fi
 	;;
   stop)
+	if init_is_upstart; then
+            exit 1
+        fi
 	echo -n "Stopping $DESC: "
 	$KDUMP_SCRIPT unload
 	;;
@@ -55,6 +61,9 @@ case "$1" in
 	$KDUMP_SCRIPT status
 	;;
   restart|force-reload)
+	if init_is_upstart; then
+            exit 1
+        fi
   	# alias the required 'force-reload' option
 	$KDUMP_SCRIPT unload
 	$KDUMP_SCRIPT load
