@@ -22,8 +22,8 @@ USE_KDUMP=0
 #     If these are not set, kdump-config will try to use the current kernel
 #     and initrd if it is relocatable.  Otherwise, you will need to specify 
 #     these manually.
-#KDUMP_KERNEL=
-#KDUMP_INITRD=
+KDUMP_KERNEL=/var/lib/kdump/vmlinuz
+KDUMP_INITRD=/var/lib/kdump/initrd.img
 
 
 # ---------------------------------------------------------------------------
