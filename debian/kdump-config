@@ -153,9 +153,17 @@ function kdump_test()
 	echo "crashkernel addr:  $IOMEM_ADDR"
 	echo "kdump kernel addr: $KDUMP_ADDR"
 	echo "kdump kernel:"
-	echo "   $KDUMP_KERNEL"
+	if [ -h "$KDUMP_KERNEL" ];then
+		echo "   "$(file $KDUMP_KERNEL)
+	else
+		echo "   "$KDUMP_KERNEL
+	fi
 	echo "kdump initrd: "
-	echo "  $KDUMP_INITRD"
+	if [ -h "$KDUMP_INITRD" ];then
+		echo "   "$(file $KDUMP_INITRD)
+	else
+		echo "   "$KDUMP_INITRD
+	fi
 	echo "kexec command to be used:"
 	echo "  $KEXEC_CMD"
 }
