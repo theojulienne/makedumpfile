@@ -16,13 +16,6 @@ if [ "$INITRD" = 'No' ]; then
 	exit 0
 fi
 
-# absolute file name of kernel image may be passed as a second argument;
-# create kdump dir will be located in the kernel directory
-if [ -n "$2" ]; then
-	bootdir=$(dirname "$2")
-	kdumpdir="$bootdir/kdump"
-fi
-
 # avoid running multiple times
 if [ -n "$DEB_MAINT_PARAMS" ]; then
 	eval set -- "$DEB_MAINT_PARAMS"
