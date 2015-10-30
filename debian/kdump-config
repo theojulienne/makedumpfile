@@ -46,6 +46,7 @@ ARCH=`uname -m`
 KDUMP_SYSCTL=${KDUMP_SYSCTL:="kernel.panic_on_oops=1"}
 KDUMP_COREDIR=${KDUMP_COREDIR:=/var/crash}
 KDUMP_DUMP_DMESG=${KDUMP_DUMP_DMESG:=1}
+KDUMP_DIR="/var/lib/kdump"
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
 KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll maxcpus=1 nousb systemd.unit=kdump-tools.service"}
 [ -d $KDUMP_COREDIR ] || mkdir -p $KDUMP_COREDIR ;
