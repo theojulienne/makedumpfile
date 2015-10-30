@@ -180,6 +180,19 @@ symlink=$1
 	fi
 }
 
+# Create a symlink
+function create_symlink()
+{
+link=$1
+	target=${link%-$KVER}
+	log_action_msg "Creating symlink $KDUMP_DIR/$target"
+	if [ $target == "vmlinuz" ];then
+		ln -fs /boot/$link $KDUMP_DIR/$target
+	else
+		ln -fs $KDUMP_DIR/$link $KDUMP_DIR/$target
+	fi
+}
+
 # check_fadump_support:  Other miscellaneous checks go here:
 # 1: if USE_KDUMP is 0, don't set up fadump.
 # 2: -e /sys/kernel/fadump_registered indicates that this kernel
