@@ -160,6 +160,26 @@ function kdump_test()
 	echo "  $KEXEC_CMD"
 }
 
+# Check if symlinks are correctly set if $KDUMP_DIR
+# is used to store smaller initrd.img files (Ubuntu only)
+# Returns: 0/1/2 (success/broken/absent)
+#
+function check_symlink()
+{
+symlink=$1
+
+	if [ -h "$KDUMP_DIR/$symlink" ];then
+		linkedfile=$(file "$KDUMP_DIR/$symlink" | rev | cut -d" " -f1 | rev)
+		if [ -e "$linkedfile" ];then
+			return 0
+		else
+			return 1
+		fi
+	else
+		return 2
+	fi
+}
+
 # check_fadump_support:  Other miscellaneous checks go here:
 # 1: if USE_KDUMP is 0, don't set up fadump.
 # 2: -e /sys/kernel/fadump_registered indicates that this kernel
