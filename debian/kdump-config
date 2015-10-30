@@ -214,6 +214,54 @@ target=$1
 	fi
 }
 
+# If $KDUMP_DIR is used to hold smaller initrd.img,
+# verify if the proper symlinks are in place for
+# initrd.img and vmlinuz.
+# If no link is found new links are created.
+# If they are found to be broken, remove the broken
+# links and recreate them
+# If existing links do not point to the running kernel
+# remove them and create new links
+# Nothing is created if DRY_RUN = true. Only reporting
+# is done.
+# Returns: none. prints warnings or exit
+# Creates: $KDUMP_DIR/vmlinuz $KDUMP_DIR/initrd.img
+function manage_symlinks()
+{
+	if [ -d "$KDUMP_DIR" ];then
+		for symlink in initrd.img vmlinuz;do
+			check_symlink $symlink
+			ret=$?
+			if [ $ret == 2 ];then
+				log_failure_msg "Missing symlink : $KDUMP_DIR/$symlink"
+				if [ ! $DRY_RUN ];then
+					create_symlink $symlink-$KVER
+				fi
+			elif [ $ret == 1 ];then
+				log_failure_msg "Broken symlink : $(file $KDUMP_DIR/$symlink)"
+				if [ ! $DRY_RUN ];then
+					rm -f $KDUMP_DIR/$symlink
+					create_symlink $symlink-$KVER
+				fi
+			elif [ $ret == 0 ];then
+				symlink_current $symlink
+				current=$?
+				if [ $current == 1 ];then
+					log_action_msg "$KDUMP_DIR/$symlink pointing to wrong file"
+					if [ ! $DRY_RUN ];then
+						rm -f $KDUMP_DIR/$symlink
+						create_symlink $symlink-$KVER
+					fi
+				fi
+			else
+				### Should never get here
+				log_failure_msg "Invalid return code from check_symlink()"
+			fi
+		done
+	fi
+	return 0
+}
+
 # check_fadump_support:  Other miscellaneous checks go here:
 # 1: if USE_KDUMP is 0, don't set up fadump.
 # 2: -e /sys/kernel/fadump_registered indicates that this kernel
@@ -734,6 +782,7 @@ case "$1" in
 		check_fadump_support
 	else
 		check_kdump_support;
+		manage_symlinks;
 		locate_kdump_kernel;
 		kdump_load;
 		kdump_test
@@ -754,6 +803,7 @@ case "$1" in
 		fadump_register
 	else
 		check_kdump_support;
+		manage_symlinks;
 		locate_kdump_kernel;
 		kdump_load
 	fi
@@ -774,7 +824,9 @@ case "$1" in
 			echo "current state   : Not ready to fadump";
 		fi
 	else
+		DRY_RUN=true
 		check_kdump_support;
+		manage_symlinks;
 		if [ `cat $sys_kexec_crash` -eq 1 ] ; then
 			echo "current state   : ready to kdump";
 		else
