@@ -193,6 +193,27 @@ link=$1
 	fi
 }
 
+# Verify that the version of the symlink target
+# is equal to the current running kernel version
+# Returns : 0 if versions are the same, 1 otherwise
+function symlink_current()
+{
+target=$1
+
+	linkedfile=$(file $KDUMP_DIR/$target | rev | cut -d" " -f1 | rev)
+	if [ $target == "vmlinuz" ];then
+		linkversion=${linkedfile#/boot/vmlinuz-}
+	else
+		linkversion=${linkedfile#$KDUMP_DIR/initrd.img-}
+	fi
+
+	if [ $linkversion != $KVER ];then
+		return 1
+	else
+		return 0
+	fi
+}
+
 # check_fadump_support:  Other miscellaneous checks go here:
 # 1: if USE_KDUMP is 0, don't set up fadump.
 # 2: -e /sys/kernel/fadump_registered indicates that this kernel
