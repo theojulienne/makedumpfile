@@ -1,7 +1,7 @@
 # makedumpfile
 
-VERSION=1.5.8
-DATE=25 Mar 2015
+VERSION=1.5.9
+DATE=28 Oct 2015
 
 # Honour the environment variable CC
 ifeq ($(strip $CC),)
@@ -49,6 +49,7 @@ SRC_BASE = makedumpfile.c makedumpfile.h diskdump_mod.h sadump_mod.h sadump_info
 SRC_PART = print_info.c dwarf_info.c elf_info.c erase_info.c sadump_info.c cache.c
 OBJ_PART=$(patsubst %.c,%.o,$(SRC_PART))
 SRC_ARCH = arch/arm.c arch/x86.c arch/x86_64.c arch/ia64.c arch/ppc64.c arch/s390x.c arch/ppc.c
+SRC_ARCH = arch/arm.c arch/arm64.c arch/x86.c arch/x86_64.c arch/ia64.c arch/ppc64.c arch/s390x.c arch/ppc.c
 OBJ_ARCH=$(patsubst %.c,%.o,$(SRC_ARCH))
 
 LIBS = -ldw -lbz2 -lebl -ldl -lelf -lz
@@ -65,6 +66,8 @@ ifeq ($(USESNAPPY), on)
 LIBS := -lsnappy $(LIBS)
 CFLAGS += -DUSESNAPPY
 endif
+
+LIBS := -lpthread $(LIBS)
 
 all: makedumpfile
 

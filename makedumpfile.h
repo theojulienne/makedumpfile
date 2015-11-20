@@ -41,7 +41,9 @@
 #include "common.h"
 #include "dwarf_info.h"
 #include "diskdump_mod.h"
+#include "print_info.h"
 #include "sadump_mod.h"
+#include <pthread.h>
 
 /*
  * Result of command
@@ -428,6 +430,19 @@ do { \
 #define SPLITTING_SIZE_EI(i)	info->splitting_info[i].size_eraseinfo
 
 /*
+ * Macro for getting parallel info.
+ */
+#define FD_MEMORY_PARALLEL(i)		info->parallel_info[i].fd_memory
+#define FD_BITMAP_MEMORY_PARALLEL(i)	info->parallel_info[i].fd_bitmap_memory
+#define FD_BITMAP_PARALLEL(i)		info->parallel_info[i].fd_bitmap
+#define BUF_PARALLEL(i)			info->parallel_info[i].buf
+#define BUF_OUT_PARALLEL(i)		info->parallel_info[i].buf_out
+#define MMAP_CACHE_PARALLEL(i)		info->parallel_info[i].mmap_cache
+#define ZLIB_STREAM_PARALLEL(i)		info->parallel_info[i].zlib_stream
+#ifdef USELZO
+#define WRKMEM_PARALLEL(i)		info->parallel_info[i].wrkmem
+#endif
+/*
  * kernel version
  *
  * NOTE: the format of kernel_version is as follows
@@ -441,7 +456,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 19, 0)/* linux-3.19.0 */
+#define LATEST_VERSION		KERNEL_VERSION(4, 1, 0)/* linux-4.1.0 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -482,6 +497,33 @@ do { \
 #define VMALLOC_END		(info->vmalloc_end)
 #define VMEMMAP_START		(info->vmemmap_start)
 #define VMEMMAP_END		(info->vmemmap_end)
+
+#ifdef __aarch64__
+#define CONFIG_ARM64_PGTABLE_LEVELS	2
+#define CONFIG_ARM64_VA_BITS		42
+#define CONFIG_ARM64_64K_PAGES		1
+
+/* Currently we only suport following defines based on above
+ * config definitions.
+ * TODOs: We need to find a way to get above defines dynamically and
+ * then to support following definitions based on that
+ */
+
+#if CONFIG_ARM64_PGTABLE_LEVELS == 2
+#define ARM64_PGTABLE_LEVELS	2
+#endif
+
+#if CONFIG_ARM64_VA_BITS == 42
+#define VA_BITS			42
+#endif
+
+#ifdef CONFIG_ARM64_64K_PAGES
+#define PAGE_SHIFT		16
+#endif
+
+#define KVBASE_MASK		(0xffffffffffffffffUL << (VA_BITS - 1))
+#define KVBASE			(SYMBOL(_stext) & KVBASE_MASK)
+#endif /* aarch64 */
 
 #ifdef __arm__
 #define KVBASE_MASK		(0xffff)
@@ -761,6 +803,22 @@ do { \
  */
 static inline int stub_true() { return TRUE; }
 static inline int stub_true_ul(unsigned long x) { return TRUE; }
+#ifdef __aarch64__
+int get_phys_base_arm64(void);
+int get_machdep_info_arm64(void);
+unsigned long long vaddr_to_paddr_arm64(unsigned long vaddr);
+int get_versiondep_info_arm64(void);
+int get_xen_basic_info_arm64(void);
+int get_xen_info_arm64(void);
+#define vaddr_to_paddr(X)	vaddr_to_paddr_arm64(X)
+#define get_phys_base()		get_phys_base_arm64()
+#define get_machdep_info()	get_machdep_info_arm64()
+#define get_versiondep_info()	get_versiondep_info_arm64()
+#define get_xen_basic_info_arch(X) get_xen_basic_info_arm64(X)
+#define get_xen_info_arch(X) get_xen_info_arm64(X)
+#define is_phys_addr(X)		stub_true_ul(X)
+#endif /* aarch64 */
+
 #ifdef __arm__
 int get_phys_base_arm(void);
 int get_machdep_info_arm(void);
@@ -897,7 +955,7 @@ struct dump_bitmap {
 	int		fd;
 	int		no_block;
 	char		*file_name;
-	char		buf[BUFSIZE_BITMAP];
+	char		*buf;
 	off_t		offset;
 };
 
@@ -911,6 +969,45 @@ struct cache_data {
 };
 typedef unsigned long int ulong;
 typedef unsigned long long int ulonglong;
+
+/*
+ * for parallel process
+ */
+
+#define PAGE_DATA_NUM	(50)
+#define WAIT_TIME	(60 * 10)
+#define PTHREAD_FAIL	((void *)-2)
+#define NUM_BUFFERS	(50)
+
+struct mmap_cache {
+	char	*mmap_buf;
+	off_t	mmap_start_offset;
+	off_t   mmap_end_offset;
+};
+
+struct page_data
+{
+	mdf_pfn_t pfn;
+	int dumpable;
+	int zero;
+	unsigned int flags;
+	long size;
+	unsigned char *buf;
+	pthread_mutex_t mutex;
+	/*
+	 * whether the page_data is ready to be consumed
+	 */
+	int ready;
+};
+
+struct thread_args {
+	int thread_num;
+	unsigned long len_buf_out;
+	mdf_pfn_t start_pfn, end_pfn;
+	int page_data_num;
+	struct cycle *cycle;
+	struct page_data *page_data_buf;
+};
 
 /*
  * makedumpfile header
@@ -947,6 +1044,19 @@ struct splitting_info {
 	unsigned long		size_eraseinfo;
 } splitting_info_t;
 
+struct parallel_info {
+	int			fd_memory;
+	int 			fd_bitmap_memory;
+	int			fd_bitmap;
+	unsigned char		*buf;
+	unsigned char 		*buf_out;
+	struct mmap_cache	*mmap_cache;
+	z_stream		zlib_stream;
+#ifdef USELZO
+	lzo_bytep		wrkmem;
+#endif
+} parallel_info_t;
+
 struct ppc64_vmemmap {
 	unsigned long		phys;
 	unsigned long		virt;
@@ -976,7 +1086,7 @@ struct DumpInfo {
 	int		flag_rearrange;      /* flag of creating dumpfile from
 						flattened format */
 	int		flag_split;	     /* splitting vmcore */
-  	int		flag_cyclic;	     /* cyclic processing to keep memory consumption */
+	int		flag_cyclic;	     /* multi-cycle processing is necessary */
 	int		flag_usemmap;	     /* /proc/vmcore supports mmap(2) */
 	int		flag_reassemble;     /* reassemble multiple dumpfiles into one */
 	int		flag_refiltering;    /* refilter from kdump-compressed file */
@@ -1083,6 +1193,7 @@ struct DumpInfo {
 	char			*name_dumpfile;
 	int			num_dumpfile;
 	struct splitting_info	*splitting_info;
+	struct parallel_info	*parallel_info;
 
 	/*
 	 * bitmap info:
@@ -1149,8 +1260,7 @@ struct DumpInfo {
 	/*
 	 * for cyclic processing
 	 */
-	char               *partial_bitmap1;
-	char               *partial_bitmap2;
+	char	           *working_dir;	     /* working directory for bitmap */
 	mdf_pfn_t          num_dumpable;
 	unsigned long      bufsize_cyclic;
 	unsigned long      pfn_cyclic;
@@ -1177,6 +1287,20 @@ struct DumpInfo {
 	 * for cyclic_splitting mode, setup splitblock_size
 	 */
 	long long splitblock_size;
+	/*
+	 * for parallel process
+	 */
+	int num_threads;
+	int num_buffers;
+	pthread_t **threads;
+	struct thread_args *kdump_thread_args;
+	struct page_data *page_data_buf;
+	pthread_rwlock_t usemmap_rwlock;
+	mdf_pfn_t current_pfn;
+	pthread_mutex_t current_pfn_mutex;
+	mdf_pfn_t consumed_pfn;
+	pthread_mutex_t consumed_pfn_mutex;
+	pthread_mutex_t filter_mutex;
 };
 extern struct DumpInfo		*info;
 
@@ -1608,6 +1732,11 @@ struct domain_list {
 #define PAGES_PER_MAPWORD 	(sizeof(unsigned long) * 8)
 #define MFNS_PER_FRAME		(info->page_size / sizeof(unsigned long))
 
+#ifdef __aarch64__
+unsigned long long kvtop_xen_arm64(unsigned long kvaddr);
+#define kvtop_xen(X)	kvtop_xen_arm64(X)
+#endif /* aarch64 */
+
 #ifdef __arm__
 #define kvtop_xen(X)	FALSE
 #define get_xen_basic_info_arch(X) FALSE
@@ -1740,12 +1869,26 @@ is_on(char *bitmap, mdf_pfn_t i)
 }
 
 static inline int
-is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
+is_dumpable_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
+{
+	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
+		return FALSE;
+	else
+		return is_on(bitmap->buf, pfn - cycle->start_pfn);
+}
+
+static inline int
+is_dumpable_file(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 {
 	off_t offset;
 	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
 		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
-		lseek(bitmap->fd, offset, SEEK_SET);
+		if (lseek(bitmap->fd, offset, SEEK_SET) < 0 ) {
+			ERRMSG("Can't seek the bitmap(%s). %s\n",
+				bitmap->file_name, strerror(errno));
+			return FALSE;
+		}
+
 		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
 		if (pfn == 0)
 			bitmap->no_block = 0;
@@ -1756,12 +1899,13 @@ is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 }
 
 static inline int
-is_dumpable_cyclic(char *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
+is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
 {
-	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
-		return FALSE;
-	else
-		return is_on(bitmap, pfn - cycle->start_pfn);
+	if (bitmap->fd == 0) {
+		return is_dumpable_buffer(bitmap, pfn, cycle);
+	} else {
+		return is_dumpable_file(bitmap, pfn);
+	}
 }
 
 static inline int
@@ -1891,12 +2035,13 @@ struct elf_prstatus {
 #define OPT_DUMP_DMESG          OPT_START+7
 #define OPT_CONFIG              OPT_START+8
 #define OPT_DISKSET             OPT_START+9
-#define OPT_NON_CYCLIC          OPT_START+10
-#define OPT_CYCLIC_BUFFER       OPT_START+11
-#define OPT_EPPIC               OPT_START+12
-#define OPT_NON_MMAP            OPT_START+13
-#define OPT_MEM_USAGE            OPT_START+14
-#define OPT_SPLITBLOCK_SIZE	OPT_START+15
+#define OPT_CYCLIC_BUFFER       OPT_START+10
+#define OPT_EPPIC               OPT_START+11
+#define OPT_NON_MMAP            OPT_START+12
+#define OPT_MEM_USAGE           OPT_START+13
+#define OPT_SPLITBLOCK_SIZE	OPT_START+14
+#define OPT_WORKING_DIR         OPT_START+15
+#define OPT_NUM_THREADS	OPT_START+16
 
 /*
  * Function Prototype.
@@ -1908,5 +2053,7 @@ int initial_xen(void);
 unsigned long long get_free_memory_size(void);
 int calculate_cyclic_buffer_size(void);
 int prepare_splitblock_table(void);
+int initialize_zlib(z_stream *stream, int level);
+int finalize_zlib(z_stream *stream);
 
 #endif /* MAKEDUMPFILE_H */

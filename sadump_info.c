@@ -85,6 +85,7 @@ struct sadump_info {
 	unsigned long long backup_offset;
 	int kdump_backed_up;
 	mdf_pfn_t max_mapnr;
+	struct dump_bitmap *ram_bitmap;
 };
 
 static char *guid_to_str(efi_guid_t *guid, char *buf, size_t buflen);
@@ -127,6 +128,35 @@ static int get_registers(int cpu, struct elf_prstatus *prstatus);
 static struct sadump_info sadump_info = {};
 static struct sadump_info *si = &sadump_info;
 
+static inline int
+sadump_is_on(char *bitmap, mdf_pfn_t i)
+{
+	return bitmap[i >> 3] & (1 << (7 - (i & 7)));
+}
+
+static inline int
+sadump_is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
+{
+	off_t offset;
+
+	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
+		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
+		lseek(bitmap->fd, offset, SEEK_SET);
+		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		if (pfn == 0)
+			bitmap->no_block = 0;
+		else
+			bitmap->no_block = pfn / PFN_BUFBITMAP;
+	}
+	return sadump_is_on(bitmap->buf, pfn % PFN_BUFBITMAP);
+}
+
+static inline int
+sadump_is_ram(mdf_pfn_t pfn)
+{
+	return sadump_is_dumpable(si->ram_bitmap, pfn);
+}
+
 int
 check_and_get_sadump_header_info(char *filename)
 {
@@ -161,6 +191,21 @@ check_and_get_sadump_header_info(char *filename)
 	return TRUE;
 }
 
+static void
+reverse_bit(char *buf, int len)
+{
+	int i;
+	unsigned char c;
+
+	for (i = 0; i < len; i++) {
+		c = buf[i];
+		c = ((c & 0x55) << 1) | ((c & 0xaa) >> 1); /* Swap 1bit */
+		c = ((c & 0x33) << 2) | ((c & 0xcc) >> 2); /* Swap 2bit */
+		c = (c << 4) | (c >> 4); /* Swap 4bit */
+		buf[i] = c;
+	}
+}
+
 int
 sadump_copy_1st_bitmap_from_memory(void)
 {
@@ -189,6 +234,14 @@ sadump_copy_1st_bitmap_from_memory(void)
 			       info->name_memory, strerror(errno));
 			return FALSE;
 		}
+		/*
+		 * sadump formats associate each bit in a bitmap with
+		 * a physical page in reverse order with the
+		 * kdump-compressed format. We need to change bit
+		 * order to reuse bitmaps in sadump formats in the
+		 * kdump-compressed format.
+		 */
+		reverse_bit(buf, sizeof(buf));
 		if (write(info->bitmap1->fd, buf, sizeof(buf)) != sizeof(buf)) {
 			ERRMSG("Can't write the bitmap(%s). %s\n",
 			       info->bitmap1->file_name, strerror(errno));
@@ -215,7 +268,7 @@ sadump_copy_1st_bitmap_from_memory(void)
 						      si->backup_offset -
 						      si->backup_src_start);
 
-			if (is_dumpable(info->bitmap_memory, backup_src_pfn))
+			if (is_dumpable(info->bitmap_memory, backup_src_pfn, NULL))
 				set_bit_on_1st_bitmap(pfn, NULL);
 			else
 				clear_bit_on_1st_bitmap(pfn, NULL);
@@ -465,9 +518,6 @@ read_sadump_header(char *filename)
 	smh = si->smh_memory;
 
 restart:
-	if (block_size < 0)
-		return FALSE;
-
 	if (!read_device(sph, block_size, &offset))
 		return ERROR;
 
@@ -698,7 +748,6 @@ read_sadump_header_diskset(int diskid, struct sadump_diskset_info *sdi)
 	if (sph->signature1 != SADUMP_SIGNATURE1 ||
 	    sph->signature2 != SADUMP_SIGNATURE2) {
 		DEBUG_MSG("sadump: does not have partition header\n");
-		free(sph);
 		goto error;
 	}
 
@@ -805,12 +854,40 @@ sadump_initialize_bitmap_memory(void)
 		for (pfn = section * SADUMP_PF_SECTION_NUM;
 		     pfn < (section + 1) * SADUMP_PF_SECTION_NUM;
 		     ++pfn)
-			if (is_dumpable(bmp, pfn))
+			if (is_dumpable(bmp, pfn, NULL))
 				block_table[section]++;
 	}
 
 	info->bitmap_memory = bmp;
 	si->block_table = block_table;
+
+	bmp = malloc(sizeof(struct dump_bitmap));
+	if (bmp == NULL) {
+		ERRMSG("Can't allocate memory for the memory-bitmap. %s\n",
+		       strerror(errno));
+		return FALSE;
+	}
+	bmp->fd = info->fd_memory;
+	bmp->file_name = info->name_memory;
+	bmp->no_block = -1;
+	memset(bmp->buf, 0, BUFSIZE_BITMAP);
+	bmp->offset = si->sub_hdr_offset + sh->block_size * sh->sub_hdr_size;
+	si->ram_bitmap = bmp;
+
+	/*
+	 * Perform explicitly zero filtering. Without this processing
+	 * crash utility faces different behaviors on reading zero
+	 * pages that are filtered out on the kdump-compressed format
+	 * originating from kdump ELF and from sadump formats: the
+	 * former succeeds in reading zero pages but the latter fails.
+	 */
+	for (pfn = 0; pfn < si->max_mapnr; pfn++) {
+		if (sadump_is_ram(pfn) &&
+		    !sadump_is_dumpable(info->bitmap_memory, pfn)) {
+			info->dump_level |= DL_EXCLUDE_ZERO;
+			break;
+		}
+	}
 
 	return TRUE;
 }
@@ -981,10 +1058,14 @@ readpage_sadump(unsigned long long paddr, void *bufptr)
 	if (pfn >= si->max_mapnr)
 		return FALSE;
 
-	if (!is_dumpable(info->bitmap_memory, pfn)) {
-		ERRMSG("pfn(%llx) is excluded from %s.\n", pfn,
-		       info->name_memory);
+	if (!sadump_is_ram(pfn)) {
+		ERRMSG("pfn(%llx) is not ram.\n", pfn);
 		return FALSE;
+	}
+
+	if (!sadump_is_dumpable(info->bitmap_memory, pfn)) {
+		memset(bufptr, 0, info->page_size);
+		return TRUE;
 	}
 
 	block = pfn_to_block(pfn);
@@ -1146,7 +1227,7 @@ pfn_to_block(mdf_pfn_t pfn)
 		block = 0;
 
 	for (p = section * SADUMP_PF_SECTION_NUM; p < pfn; ++p)
-		if (is_dumpable(info->bitmap_memory, p))
+		if (sadump_is_dumpable(info->bitmap_memory, p))
 			block++;
 
 	return block;

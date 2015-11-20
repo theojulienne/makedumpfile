@@ -1,4 +1,4 @@
-.TH MAKEDUMPFILE 8 "25 Mar 2015" "makedumpfile v1.5.8" "Linux System Administrator's Manual"
+.TH MAKEDUMPFILE 8 "28 Oct 2015" "makedumpfile v1.5.9" "Linux System Administrator's Manual"
 .SH NAME
 makedumpfile \- make a small dumpfile of kdump
 .SH SYNOPSIS
@@ -12,11 +12,13 @@ makedumpfile \- make a small dumpfile of kdump
 .br
 \fBmakedumpfile\fR \-\-split [\fIOPTION\fR] [\-x \fIVMLINUX\fR|\-i \fIVMCOREINFO\fR] \fIVMCORE\fR \fIDUMPFILE1\fR \fIDUMPFILE2\fR [\fIDUMPFILE3\fR ..]
 .br
+\fBmakedumpfile\fR [\fIOPTION\fR] [\-x \fIVMLINUX\fR|\-i \fIVMCOREINFO\fR] \-\-num\-threads \fITHREADNUM\fR \fIVMCORE\fR \fIDUMPFILE\fR
+.br
 \fBmakedumpfile\fR \-\-reassemble \fIDUMPFILE1\fR \fIDUMPFILE2\fR [\fIDUMPFILE3\fR ..] \fIDUMPFILE\fR
 .br
 \fBmakedumpfile\fR \-g \fIVMCOREINFO\fR \-x \fIVMLINUX\fR
 .br
-\fBmakedumpfile\fR \-E [\-\-xen-syms \fIXEN-SYMS\fR|\-\-xen-vmcoreinfo \fIVMCOREINFO\fR] \fIVMCORE\fR \fIDUMPFILE\fR
+\fBmakedumpfile\fR    [\fIOPTION\fR] [\-\-xen-syms \fIXEN-SYMS\fR|\-\-xen-vmcoreinfo \fIVMCOREINFO\fR] \fIVMCORE\fR \fIDUMPFILE\fR
 .br
 \fBmakedumpfile\fR \-\-dump-dmesg [\-x \fIVMLINUX\fR|\-i \fIVMCOREINFO\fR] \fIVMCORE\fR \fILOGFILE\fR
 .br
@@ -371,6 +373,17 @@ the kdump\-compressed format.
 # makedumpfile \-\-split \-d 31 \-x vmlinux /proc/vmcore dumpfile1 dumpfile2
 
 .TP
+\fB\-\-num\-threads\fR \fITHREADNUM\fR
+Using multiple threads to read and compress data of each page in parallel.
+And it will reduces time for saving \fIDUMPFILE\fR.
+This feature only supports creating \fIDUMPFILE\fR in kdump\-comressed
+format from \fIVMCORE\fR in kdump\-compressed format or elf format.
+.br
+.B Example:
+.br
+# makedumpfile \-d 31 \-\-num\-threads 4 /proc/vmcore dumpfile
+
+.TP
 \fB\-\-reassemble\fR
 Reassemble multiple \fIDUMPFILE\fRs, which are created by \-\-split option,
 into one \fIDUMPFILE\fR. dumpfile1 and dumpfile2 are reassembled into dumpfile
@@ -387,8 +400,9 @@ The default value is 4.
 
 .TP
 \fB\-\-cyclic\-buffer\fR \fIbuffer_size\fR
-Specify the buffer size in kilo bytes for analysis in the cyclic mode.
-In the cyclic mode, the number of cycles is represented as:
+Specify the buffer size in kilo bytes for bitmap data.
+Filtering processing will be divided into multi cycles to fix the memory consumption,
+the number of cycles is represented as:
 
     num_of_cycles = system_memory / (\fIbuffer_size\fR * 1024 * bit_per_bytes * page_size )
 
@@ -403,7 +417,7 @@ size, so ordinary users don't need to specify this option.
 
 .TP
 \fB\-\-splitblock\-size\fR \fIsplitblock_size\fR
-Specify the splitblock size in kilo bytes for analysis in the cyclic mode with --split.
+Specify the splitblock size in kilo bytes for analysis with --split.
 If --splitblock N is specified, difference of each splitted dumpfile size is at most N
 kilo bytes.
 .br
@@ -412,13 +426,18 @@ kilo bytes.
 # makedumpfile \-\-splitblock\-size 1024 \-d 31 \-x vmlinux \-\-split /proc/vmcore dumpfile1 dumpfile2
 
 .TP
-\fB\-\-non\-cyclic\fR
-Running in the non-cyclic mode, this mode uses the old filtering logic same as v1.4.4 or before.
-If you feel the cyclic mode is too slow, please try this mode.
+
+\fB\-\-work\-dir\fR
+Specify the working directory for the temporary bitmap file.
+If this option isn't specified, the bitmap will be saved on memory.
+Filtering processing has to do 2 pass scanning to fix the memory consumption,
+but it can be avoided by using working directory on file system.
+So if you specify this option, the filtering speed may be bit faster.
+
 .br
 .B Example:
 .br
-# makedumpfile \-\-non\-cyclic \-d 31 \-x vmlinux /proc/vmcore dumpfile
+# makedumpfile \-\-work\-dir /tmp \-d 31 \-x vmlinux /proc/vmcore dumpfile
 
 .TP
 \fB\-\-non\-mmap\fR
@@ -435,7 +454,6 @@ This option is mainly for debugging.
 \fB\-\-xen-syms\fR \fIXEN-SYMS\fR
 Specify the \fIXEN-SYMS\fR with debug information to analyze the xen's memory usage.
 This option extracts the part of xen and domain-0.
-\-E option must be specified with this option.
 .br
 .B Example:
 .br
@@ -447,7 +465,6 @@ Specify \fIVMCOREINFO\fR instead of \fIXEN-SYMS\fR for analyzing the xen's memor
 .br
 \fIVMCOREINFO\fR should be made beforehand by makedumpfile with \-g option, and
 it contains the xen's information.
-\-E option must be specified with this option.
 .br
 .B Example:
 .br
@@ -458,7 +475,6 @@ it contains the xen's information.
 Exclude all the user domain pages from Xen kdump's \fIVMCORE\fR, and extracts the
 part of xen and domain-0. If \fIVMCORE\fR contains \fIVMCOREINFO\fR for Xen, it is
 not necessary to specify \fI\-\-xen-syms\fR and \fI\-\-xen-vmcoreinfo\fR.
-\-E option must be specified with this option.
 .br
 .B Example:
 .br
@@ -605,13 +621,11 @@ Show the version of makedumpfile.
 
 .TP 8
 .B TMPDIR
-This environment variable is for a temporary memory bitmap file only in the non-cyclic mode.
-If your machine has a lots of memory and you use tmpfs on /tmp, makedumpfile
-can fail for a little memory in the 2nd kernel because makedumpfile makes a
-very large temporary memory bitmap file in this case. To avoid this failure,
-you can set a TMPDIR environment variable. If you do not set a TMPDIR
-environment variable, makedumpfile uses /tmp directory for a temporary
-bitmap file as a default.
+This environment variable is used in 1st kernel environment for a temporary memory bitmap file.
+If your machine has a lots of memory and you use small tmpfs on /tmp, makedumpfile
+can fail for a little memory because makedumpfile makes a very large temporary
+memory bitmap file in this case. To avoid this failure, you should specify
+--work-dir option to use file system on storage for the bitmap file.
 
 .SH DIAGNOSTICS
 makedumpfile exits with the following value.
