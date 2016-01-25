@@ -168,24 +168,25 @@ function kdump_test()
 	echo "  $KEXEC_CMD"
 }
 
-# Check if symlinks are correctly set if $KDUMP_DIR
+# Check if symlinks are correctly set according to the 
+# kernel version passed as argument, if $KDUMP_DIR
 # is used to store smaller initrd.img files (Ubuntu only)
-# Returns: 0/1/2 (success/broken/absent)
+# Returns: 0/1 (success/broken,absent or wrong version)
 #
 function check_symlink()
 {
 symlink=$1
+kern_version=$2
 
 	if [ -h "$KDUMP_DIR/$symlink" ];then
 		linkedfile=$(file "$KDUMP_DIR/$symlink" | rev | cut -d" " -f1 | rev)
 		if [ -e "$linkedfile" ];then
-			return 0
-		else
-			return 1
+			if [ ${linkedfile#/boot/vmlinuz-} == $kern_version ]; then
+				return 0
+			fi
 		fi
-	else
-		return 2
 	fi
+	return 1
 }
 
 # Create a symlink
@@ -201,35 +202,11 @@ link=$1
 	fi
 }
 
-# Verify that the version of the symlink target
-# is equal to the current running kernel version
-# Returns : 0 if versions are the same, 1 otherwise
-function symlink_current()
-{
-target=$1
-
-	linkedfile=$(file $KDUMP_DIR/$target | rev | cut -d" " -f1 | rev)
-	if [ $target == "vmlinuz" ];then
-		linkversion=${linkedfile#/boot/vmlinuz-}
-	else
-		linkversion=${linkedfile#$KDUMP_DIR/initrd.img-}
-	fi
-
-	if [ $linkversion != $KVER ];then
-		return 1
-	else
-		return 0
-	fi
-}
-
 # If $KDUMP_DIR is used to hold smaller initrd.img,
 # verify if the proper symlinks are in place for
 # initrd.img and vmlinuz.
-# If no link is found new links are created.
-# If they are found to be broken, remove the broken
-# links and recreate them
-# If existing links do not point to the running kernel
-# remove them and create new links
+# If no link is found, the links are broken or pointing
+# to the wrong version, new links are created.
 # Nothing is created if DRY_RUN = true. Only reporting
 # is done.
 # Returns: none. prints warnings or exit
@@ -238,32 +215,13 @@ function manage_symlinks()
 {
 	if [ -d "$KDUMP_DIR" ];then
 		for symlink in initrd.img vmlinuz;do
-			check_symlink $symlink
+			check_symlink $symlink $KVER
 			ret=$?
-			if [ $ret == 2 ];then
-				log_failure_msg "Missing symlink : $KDUMP_DIR/$symlink"
+			if [ $ret == 1 ];then
+				log_failure_msg "Invalid symlink : $KDUMP_DIR/$symlink"
 				if [ ! $DRY_RUN ];then
 					create_symlink $symlink-$KVER
 				fi
-			elif [ $ret == 1 ];then
-				log_failure_msg "Broken symlink : $(file $KDUMP_DIR/$symlink)"
-				if [ ! $DRY_RUN ];then
-					rm -f $KDUMP_DIR/$symlink
-					create_symlink $symlink-$KVER
-				fi
-			elif [ $ret == 0 ];then
-				symlink_current $symlink
-				current=$?
-				if [ $current == 1 ];then
-					log_action_msg "$KDUMP_DIR/$symlink pointing to wrong file"
-					if [ ! $DRY_RUN ];then
-						rm -f $KDUMP_DIR/$symlink
-						create_symlink $symlink-$KVER
-					fi
-				fi
-			else
-				### Should never get here
-				log_failure_msg "Invalid return code from check_symlink()"
 			fi
 		done
 	fi
