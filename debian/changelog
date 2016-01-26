@@ -1,3 +1,18 @@
+makedumpfile (1:1.5.9-3) sid; urgency=medium
+
+  * debian/patches/0003-support-kernel-4.2.patch :
+    Fix packaging AGAIN so the patch is correctly applied.
+    Previous upload missed it somehow.
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Wed, 09 Dec 2015 15:53:54 +0100
+
+makedumpfile (1:1.5.9-2) sid; urgency=medium
+
+  * debian/patches/0003-support-kernel-4.2.patch :
+    Fix packaging error so the patch is correctly applied
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Mon, 07 Dec 2015 15:58:42 +0100
+
 makedumpfile (1:1.5.9-1) sid; urgency=medium
 
   * New upstream version includes :
