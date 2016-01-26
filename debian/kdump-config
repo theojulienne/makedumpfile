@@ -105,6 +105,17 @@ function kdump_show()
 	if [ "$DUMP_MODE" == "kdump" ]; then
 		echo "crashkernel addr: $IOMEM_ADDR"
 	fi
+	if [ -h "$KDUMP_KERNEL" ];then
+		echo "   "$(file $KDUMP_KERNEL)
+	else
+		echo "   "$KDUMP_KERNEL
+	fi
+	echo "kdump initrd: "
+	if [ -h "$KDUMP_INITRD" ];then
+		echo "   "$(file $KDUMP_INITRD)
+	else
+		echo "   "$KDUMP_INITRD
+	fi
 
 	if [ -n "$SSH" ];then
 		echo "SSH:              $SSH"
