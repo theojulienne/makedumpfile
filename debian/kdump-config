@@ -75,7 +75,7 @@ function kdump_help()
 {
 cat <<EOHELP
 Usage:
-kdump-config {help|test|show|status|load|unload|savecore|propagate}"
+kdump-config {help|test|show|status|load|unload|savecore|propagate|symlinks kernel-version}"
   help      - print this page
   test      - Do a dry-run of kdump kernel load command by showing
               the kernels and parameters that will be used and echo'ing
@@ -92,7 +92,9 @@ kdump-config {help|test|show|status|load|unload|savecore|propagate}"
               If using fadump, unregister.
   savecore  - use previously made links to save /proc/vmcore
   propagate - Send public ssh key to remote host for passwordless connection
-
+  symlinks  - Verify and create vmlinuz and initrd.img links in /var/lib/kdump
+              according to the provided kernel version. If the target
+              initrd.img file is absent, it will create it.
 EOHELP
 }
 
@@ -827,7 +829,7 @@ case "$1" in
 	kdump_help
 	;;
   *)
-	echo "Usage: $0 {help|test|show|status|load|unload|savecore|propagate}"
+	echo "Usage: $0 {help|test|show|status|load|unload|savecore|propagate|symlinks kernel-version}"
 	exit 1
 	;;
 esac
