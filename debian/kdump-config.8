@@ -1,5 +1,5 @@
 .\"
-.TH "kdump-config" "8" "February 2015" "kdump-tools v1.1.4" "Linux System Administrator's Manual"
+.TH "kdump-config" "8" "January 2016" "kdump-tools v1.5.9" "Linux System Administrator's Manual"
 .\"
 .\" # ---------------------------------------------------------------------------
 .\"
@@ -10,7 +10,7 @@ kdump-config \- configure kdump, check status, or save a vmcore file
 .\"
 .SH SYNOPSIS
 .HP 6
-.B kdump-config { help | test | show | status | load | unload | savecore }
+.B kdump-config { help | test | show | status | load | unload | savecore | propagate | symlinks {kernel-version} }
 .\"
 .\" # ---------------------------------------------------------------------------
 .\"
@@ -73,6 +73,20 @@ Unload the kdump kernel or unregister if using firmware assisted dump (fadump)
 If 
 .I /proc/vmcore
 exists, save it using makedumpfile.
+.TP
+.B propagate
+Sends public ssh key to remote host for passwordless connection
+.TP
+.B symlinks {kernel-version}
+Verify and create 
+.BR vmlinuz 
+and 
+.BR initrd.img 
+links in 
+.I /var/lib/kdump
+according to the provided kernel version. If the target
+.BR initrd.img 
+file is absent, it will create it.
 
 .\"
 .\" # ---------------------------------------------------------------------------
@@ -91,6 +105,16 @@ a link to the current debug kernel
 .I /var/crash/kexec_cmd
 the last kexec_cmd executed by 
 .B kdump-config
+.TP 15
+.I /var/lib/kdump/vmlinuz
+Symbolic link pointing to the current kernel file in 
+.I /boot
+.TP 15
+.I /var/lib/kdump/initrd.img
+Symbolic link pointing to the 
+.B initrd.img 
+file with the current kernel version in
+.I /boot
 .\"
 .\" # ---------------------------------------------------------------------------
 .\"
@@ -196,6 +220,66 @@ file using makedumpfile and the save fails.
 this message indicates that makedumpfile 
 and the fallback method of using cp has failed.  This usually occurs
 if pathnames are wrong or if the disk is full.
+.TP
+.B Invalid argument : missing kernel version
+The 
+.B symlinks 
+command was used with a kernel version that is not installed on this server
+.TP
+.B Invalid symlink : {symbolic link}
+The listed symbolic link is absent, broken or pointing to the wrong version
+.TP
+.B Cannot change symbolic links when kdump is loaded
+The defined symbolic links are already in use. You must unload kdump before
+using the 
+.B symlinks 
+command
+.TP
+.B Unable to locate kernel hook
+The 
+.B kdump-tools 
+script responsible for the creation of smaller initrd.img files is 
+absent from 
+.I /usr/kernel/postinst.d
+.TP
+.B Invalid kernel version : {kernel version}
+The kernel version given to the 
+.B symlinks 
+command does not exist
+.TP
+.B fadump is not configured in this kernel.
+The Firmware Assisted Dump (fadump) facility is not available on this platform
+.TP
+.B SSH and NFS cannot be defined concurrently
+Both variables are defined in /etc/default/kdump-tools. You must choose one 
+or the other as configuration option.
+.TP
+.B Unable to mount remote NFS directory {directory}. Cannot save core
+The remote NFS server does not authorize this server to mount the directory
+to save the crash dump.
+.TP
+.B Unable to write to the remote NFS directory {directory}. Cannot save core
+The remote NFS directory can be mounted but this server cannot write files to
+it.
+.TP
+.B makedumpfile --dump-dmesg failed. dmesg content will be unavailable
+The command to capture the content of the dmesg buffer failed. It will not
+be available in the crash directory
+.TP
+.B Unable to reach remote server {server}. No reason to continue
+.B kdump-tools 
+is configured for remote dump but the remote server cannot be reached.
+.TP
+.B makedumpfile scp failed. The vmcore file will  not be available
+The 
+.B makedumpfile 
+command was successful but the resulting file could not be copied over SSH
+to the remote server.
+.TP
+.B Remote ssh dump is not configured. No reason to propagate"
+The 
+.B propagate 
+command was used but kdump is not configured for remote dump.
 .\"
 .\" # ---------------------------------------------------------------------------
 .\"
@@ -215,4 +299,4 @@ if pathnames are wrong or if the disk is full.
 .\"
 .SH AUTHOR
 .PP 
-Terry Loftin <terry.loftin@hp.com>
+Written by Terry Loftin <terry.loftin@hp.com> and Louis Bouchard <louis.bouchard@ubuntu.com>
