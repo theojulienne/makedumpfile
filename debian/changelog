@@ -1,3 +1,24 @@
+makedumpfile (1:1.5.9-4) sid; urgency=medium
+
+  * Allow for symlinks to be created for vmlinux files : On Power8
+    architecture, systems are booting from a vmlinux file. The symlink
+    /var/lib/kdump/vmlinuz has to point to this file.  (LP: #1536904)
+
+  * Add functionality to create symlinks for older kernels : If kdump
+    is installed on systems with more than one kernel package, the smaller
+    initrd.img file will only be created for the latest kernel. Adding the
+    'symlinks' functionality will allow for the creation of symlinks to
+    older kernels. If the smaller initrd.img file is missing in /var/lib/kdump
+    it will be created beforehand.  This will be preempted if kdump is already
+    loaded. (LP: #1537714)
+
+  * Fix kdump-config manpage : add documentation for the propagate option.
+    (LP: #1538148)
+
+  * Improve manpage for kdump-config
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Tue, 26 Jan 2016 15:30:48 +0100
+
 makedumpfile (1:1.5.9-3) sid; urgency=medium
 
   * debian/patches/0003-support-kernel-4.2.patch :
