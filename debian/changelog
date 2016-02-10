@@ -1,3 +1,11 @@
+makedumpfile (1:1.5.9-5) sid; urgency=medium
+
+  [ Hendrik Brueckner ]
+  * Build makedumpfile for s390x (Closes: #710674)
+  * Enable LZO compression for makedumpfile
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Wed, 10 Feb 2016 10:14:37 +0100
+
 makedumpfile (1:1.5.9-4) sid; urgency=medium
 
   * Allow for symlinks to be created for vmlinux files : On Power8
