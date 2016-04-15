@@ -34,6 +34,31 @@ case "$1" in
     configure)
         # create smaller initrd.img files for kdump use
             /etc/kernel/postinst.d/kdump-tools $(uname -r) > /dev/null 2>&1
+
+	# Customize crashkernel= value according to architecture
+	ARCH="$(arch)"
+	DEF_PRESET="128M"
+	LPAR_PRESET="196M"
+	PPC_PRESET="2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M@32M"
+	VIRT_TYPE="$(systemd-detect-virt)"
+	case "$ARCH" in
+		s390x)
+			HAS_CRASHKERNEL="$(grep crashkernel /etc/zipl.conf)" || true
+			if test -z "$HAS_CRASHKERNEL"; then
+				if test "$VIRT_TYPE" = "zvm"; then
+					sed -i "/parameters/{s|\"$| crashkernel=${DEF_PRESET}\"|}" /etc/zipl.conf
+				else
+					sed -i "/parameters/{s|\"$| crashkernel=${LPAR_PRESET}\"|}" /etc/zipl.conf
+				fi
+			fi
+		;;
+		ppc64el)
+			sed -i "s/UNCONFIGURED/$PPC_PRESET/" /etc/grub.d/kdump-tools.cfg
+		;;
+		*)
+			sed -i "s/UNCONFIGURED/$DEF_PRESET/" /etc/grub.d/kdump-tools.cfg
+		;;
+	esac
     ;;
 
     abort-upgrade|abort-remove|abort-deconfigure)
