@@ -38,18 +38,16 @@ case "$1" in
 	# Customize crashkernel= value according to architecture
 	ARCH="$(arch)"
 	DEF_PRESET="128M"
-	LPAR_PRESET="196M"
 	PPC_PRESET="2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M@32M"
-	VIRT_TYPE="$(systemd-detect-virt)"
 	case "$ARCH" in
 		s390x)
 			HAS_CRASHKERNEL="$(grep crashkernel /etc/zipl.conf)" || true
 			if test -z "$HAS_CRASHKERNEL"; then
-				if test "$VIRT_TYPE" = "zvm"; then
-					sed -i "/parameters/{s|\"$| crashkernel=${DEF_PRESET}\"|}" /etc/zipl.conf
-				else
-					sed -i "/parameters/{s|\"$| crashkernel=${LPAR_PRESET}\"|}" /etc/zipl.conf
-				fi
+				sed -i "/parameters/{s|\"$| crashkernel=${DEF_PRESET}\"|}" /etc/zipl.conf
+				zipl
+				CIO_IGNORE="$(cio_ignore -u -k)"
+				sed -i "s/\#KDUMP_CMDLINE_APPEND/KDUMP_CMDLINE_APPEND/" /etc/default/kdump-tools
+				sed -i "/KDUMP_CMDLINE_APPEND/{s|\"$| ${CIO_IGNORE}\"|}" /etc/default/kdump-tools
 			fi
 		;;
 		ppc64el)
