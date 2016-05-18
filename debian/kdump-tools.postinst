@@ -51,10 +51,10 @@ case "$1" in
 			fi
 		;;
 		ppc64el)
-			sed -i "s/UNCONFIGURED/$PPC_PRESET/" /etc/grub.d/kdump-tools.cfg
+			sed -i "s/UNCONFIGURED/$PPC_PRESET/" /etc/default/grub.d/kdump-tools.cfg
 		;;
 		*)
-			sed -i "s/UNCONFIGURED/$DEF_PRESET/" /etc/grub.d/kdump-tools.cfg
+			sed -i "s/UNCONFIGURED/$DEF_PRESET/" /etc/default/grub.d/kdump-tools.cfg
 		;;
 	esac
     ;;
