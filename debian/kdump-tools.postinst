@@ -37,7 +37,7 @@ case "$1" in
 
 	# Customize crashkernel= value according to architecture
 	ARCH="$(arch)"
-	DEF_PRESET="128M"
+	DEF_PRESET="384M-:128M"
 	PPC_PRESET="2G-4G:320M,4G-32G:512M,32G-64G:1024M,64G-128G:2048M,128G-:4096M@32M"
 	case "$ARCH" in
 		s390x)
