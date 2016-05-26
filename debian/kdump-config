@@ -660,6 +660,7 @@ function kdump_save_core()
 		if [ $num_dumps -gt $KDUMP_NUM_DUMPS ] ; then
 			purge_num=$((num_dumps - KDUMP_NUM_DUMPS))
 			purge_dir=$(ls -1dv $KDUMP_COREDIR/2* | head -$purge_num | tr "\n" " ")
+			log_action_msg "Too many dumps, purging: $purge_dir"
 			logger -t $NAME "Too many dumps, purging: $purge_dir"
 			rm -rf $purge_dir
 		fi
