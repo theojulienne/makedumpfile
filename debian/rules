@@ -2,7 +2,7 @@
 
 DEB_HOST_ARCH := $(shell dpkg-architecture -qDEB_HOST_ARCH)
 ifeq ($(shell dpkg-vendor --derives-from Ubuntu && echo yes),yes)
-	SUBSTVARS = -Vdist:Depends="kexec-tools (>= 1:2.0.10-3)"
+	SUBSTVARS = -Vdist:Depends="kexec-tools (>= 1:2.0.10-2)"
 else
 	SUBSTVARS = -Vdist:Depends="kexec-tools"
 endif
