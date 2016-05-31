@@ -1,3 +1,11 @@
+makedumpfile (1:1.5.9-7) sid; urgency=medium
+
+  * [d/rules] Lower kexec-tools dependency to -2
+      The ubuntu merge will happen on an 1:2.0.10-2 version so it cannot 
+      depends on -3.
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Tue, 31 May 2016 14:36:07 +0200
+
 makedumpfile (1:1.5.9-6) sid; urgency=medium
 
   * [ Juerg Haefliger <juerg.haefliger@hp.com> ]
