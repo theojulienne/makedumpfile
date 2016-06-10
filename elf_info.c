@@ -38,6 +38,7 @@
 
 struct pt_load_segment {
 	off_t			file_offset;
+	off_t			file_size;
 	unsigned long long	phys_start;
 	unsigned long long	phys_end;
 	unsigned long long	virt_start;
@@ -162,10 +163,11 @@ dump_Elf_load(Elf64_Phdr *prog, int num_load)
 
 	pls = &pt_loads[num_load];
 	pls->phys_start  = prog->p_paddr;
-	pls->phys_end    = pls->phys_start + prog->p_filesz;
+	pls->phys_end    = pls->phys_start + prog->p_memsz;
 	pls->virt_start  = prog->p_vaddr;
-	pls->virt_end    = pls->virt_start + prog->p_filesz;
+	pls->virt_end    = pls->virt_start + prog->p_memsz;
 	pls->file_offset = prog->p_offset;
+	pls->file_size   = prog->p_filesz;
 
 	DEBUG_MSG("LOAD (%d)\n", num_load);
 	DEBUG_MSG("  phys_start : %llx\n", pls->phys_start);
@@ -462,7 +464,7 @@ paddr_to_offset(unsigned long long paddr)
 	for (i = offset = 0; i < num_pt_loads; i++) {
 		pls = &pt_loads[i];
 		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)) {
+		    && (paddr < pls->phys_start + pls->file_size)) {
 			offset = (off_t)(paddr - pls->phys_start) +
 				pls->file_offset;
 			break;
@@ -480,16 +482,14 @@ paddr_to_offset2(unsigned long long paddr, off_t hint)
 {
 	int i;
 	off_t offset;
-	unsigned long long len;
 	struct pt_load_segment *pls;
 
 	for (i = offset = 0; i < num_pt_loads; i++) {
 		pls = &pt_loads[i];
-		len = pls->phys_end - pls->phys_start;
 		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)
+		    && (paddr < pls->phys_start + pls->file_size)
 		    && (hint >= pls->file_offset)
-		    && (hint < pls->file_offset + len)) {
+		    && (hint < pls->file_offset + pls->file_size)) {
 			offset = (off_t)(paddr - pls->phys_start) +
 				pls->file_offset;
 			break;
@@ -689,6 +689,34 @@ get_max_paddr(void)
 			max_paddr = pls->phys_end;
 	}
 	return max_paddr;
+}
+
+/*
+ * Find the LOAD segment which is closest to the requested
+ * physical address within a given distance.
+ *  If there is no such segment, return a negative number.
+ */
+int
+closest_pt_load(unsigned long long paddr, unsigned long distance)
+{
+	int i, bestidx;
+	struct pt_load_segment *pls;
+	unsigned long bestdist;
+
+	bestdist = distance;
+	bestidx = -1;
+	for (i = 0; i < num_pt_loads; ++i) {
+		pls = &pt_loads[i];
+		if (paddr >= pls->phys_end)
+			continue;
+		if (paddr >= pls->phys_start)
+			return i;	/* Exact match */
+		if (bestdist > pls->phys_start - paddr) {
+			bestdist = pls->phys_start - paddr;
+			bestidx = i;
+		}
+	}
+	return bestidx;
 }
 
 int
@@ -1092,6 +1120,32 @@ get_pt_load(int idx,
 		*virt_start = pls->virt_start;
 	if (virt_end)
 		*virt_end   = pls->virt_end;
+
+	return TRUE;
+}
+
+int
+get_pt_load_extents(int idx,
+	unsigned long long *phys_start,
+	unsigned long long *phys_end,
+	off_t *file_offset,
+	off_t *file_size)
+{
+	struct pt_load_segment *pls;
+
+	if (num_pt_loads <= idx)
+		return FALSE;
+
+	pls = &pt_loads[idx];
+
+	if (phys_start)
+		*phys_start  = pls->phys_start;
+	if (phys_end)
+		*phys_end    = pls->phys_end;
+	if (file_offset)
+		*file_offset = pls->file_offset;
+	if (file_size)
+		*file_size   = pls->file_size;
 
 	return TRUE;
 }

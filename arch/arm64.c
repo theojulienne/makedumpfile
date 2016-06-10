@@ -23,7 +23,6 @@
 #include "../makedumpfile.h"
 #include "../print_info.h"
 
-#if CONFIG_ARM64_PGTABLE_LEVELS == 2
 typedef struct {
 	unsigned long pgd;
 } pgd_t;
@@ -37,15 +36,13 @@ typedef struct {
 } pmd_t;
 
 #define pud_offset(pgd, vaddr) 	((pud_t *)pgd)
-#define pmd_offset(pud, vaddr) 	((pmd_t *)pud)
+
 #define pgd_val(x)		((x).pgd)
 #define pud_val(x)		(pgd_val((x).pgd))
 #define pmd_val(x)		(pud_val((x).pud))
 
 #define PUD_SHIFT		PGDIR_SHIFT
 #define PUD_SIZE		(1UL << PUD_SHIFT)
-
-#endif
 
 typedef struct {
 	unsigned long pte;
@@ -71,6 +68,11 @@ typedef struct {
 */
 #define PHYS_MASK_SHIFT		48
 #define PHYS_MASK		((1UL << PHYS_MASK_SHIFT) - 1)
+/*
+ * Remove the highest order bits that are not a part of the
+ * physical address in a section
+ */
+#define PMD_SECTION_MASK        ((1UL << 40) - 1)
 
 #define PMD_TYPE_MASK		3
 #define PMD_TYPE_SECT		1
@@ -86,16 +88,89 @@ typedef struct {
 #define pmd_page_vaddr(pmd)		(__va(pmd_val(pmd) & PHYS_MASK & (int32_t)PAGE_MASK))
 #define pte_offset(dir, vaddr) 		((pte_t*)pmd_page_vaddr((*dir)) + pte_index(vaddr))
 
+
+#define pmd_offset_pgtbl_lvl_2(pud, vaddr) ((pmd_t *)pud)
+
+#define pmd_index(vaddr)		(((vaddr) >> PMD_SHIFT) & (PTRS_PER_PMD - 1))
+#define pud_page_vaddr(pud)		(__va(pud_val(pud) & PHYS_MASK & (int32_t)PAGE_MASK))
+#define pmd_offset_pgtbl_lvl_3(pud, vaddr) ((pmd_t *)pud_page_vaddr((*pud)) + pmd_index(vaddr))
+
 /* kernel struct page size can be kernel version dependent, currently
  * keep it constant.
  */
-#define KERN_STRUCT_PAGE_SIZE		64
+#define KERN_STRUCT_PAGE_SIZE		get_structure_size("page", DWARF_INFO_GET_STRUCT_SIZE)
+
 #define ALIGN(x, a) 			(((x) + (a) - 1) & ~((a) - 1))
 #define PFN_DOWN(x)			((x) >> PAGE_SHIFT)
 #define VMEMMAP_SIZE			ALIGN((1UL << (VA_BITS - PAGE_SHIFT)) * KERN_STRUCT_PAGE_SIZE, PUD_SIZE)
 #define MODULES_END			PAGE_OFFSET
 #define MODULES_VADDR			(MODULES_END - 0x4000000)
 
+static int pgtable_level;
+static int va_bits;
+static int page_shift;
+
+int
+get_pgtable_level_arm64(void)
+{
+	return pgtable_level;
+}
+
+int
+get_va_bits_arm64(void)
+{
+	return va_bits;
+}
+
+int
+get_page_shift_arm64(void)
+{
+	return page_shift;
+}
+
+pmd_t *
+pmd_offset(pud_t *puda, pud_t *pudv, unsigned long vaddr)
+{
+	if (pgtable_level == 2) {
+		return pmd_offset_pgtbl_lvl_2(puda, vaddr);
+	} else {
+		return pmd_offset_pgtbl_lvl_3(pudv, vaddr);
+	}
+}
+
+#define PAGE_OFFSET_39 (0xffffffffffffffffUL << 39)
+#define PAGE_OFFSET_42 (0xffffffffffffffffUL << 42)
+static int calculate_plat_config(void)
+{
+	unsigned long long stext;
+
+	/* Currently we assume that there are only two possible
+	 * configuration supported by kernel.
+	 * 1) Page Table Level:2, Page Size 64K and VA Bits 42
+	 * 1) Page Table Level:3, Page Size 4K and VA Bits 39
+	 * Ideally, we should have some mechanism to decide these values
+	 * from kernel symbols, but we have limited symbols in vmcore,
+	 * and we can not do much. So until some one comes with a better
+	 * way, we use following.
+	 */
+	stext = SYMBOL(_stext);
+
+	/* condition for minimum VA bits must be checked first and so on */
+	if ((stext & PAGE_OFFSET_39) == PAGE_OFFSET_39) {
+		pgtable_level = 3;
+		va_bits = 39;
+		page_shift = 12;
+	} else if ((stext & PAGE_OFFSET_42) == PAGE_OFFSET_42) {
+		pgtable_level = 2;
+		va_bits = 42;
+		page_shift = 16;
+	} else {
+		ERRMSG("Kernel Configuration not supported\n");
+		return FALSE;
+	}
+
+	return TRUE;
+}
 
 static int
 is_vtop_from_page_table_arm64(unsigned long vaddr)
@@ -114,6 +189,12 @@ get_phys_base_arm64(void)
 	unsigned long phys_base = ULONG_MAX;
 	unsigned long long phys_start;
 	int i;
+
+	if (!calculate_plat_config()) {
+		ERRMSG("Can't determine platform config values\n");
+		return FALSE;
+	}
+
 	/*
 	 * We resolve phys_base from PT_LOAD segments. LMA contains physical
 	 * address of the segment, and we use the lowest start as
@@ -141,7 +222,8 @@ get_machdep_info_arm64(void)
 {
 	info->max_physmem_bits = PHYS_MASK_SHIFT;
 	info->section_size_bits = SECTIONS_SIZE_BITS;
-	info->page_offset = KVBASE;
+	info->page_offset = SYMBOL(_stext)
+		& (0xffffffffffffffffUL << (VA_BITS - 1));
 	info->vmalloc_start = 0xffffffffffffffffUL << VA_BITS;
 	info->vmalloc_end = PAGE_OFFSET - PUD_SIZE - VMEMMAP_SIZE - 0x10000;
 	info->vmemmap_start = VMALLOC_END + 0x10000;
@@ -197,7 +279,7 @@ vtop_arm64(unsigned long vaddr)
 {
 	unsigned long long paddr = NOT_PADDR;
 	pgd_t	*pgda, pgdv;
-	pud_t	*puda;
+	pud_t	*puda, pudv;
 	pmd_t	*pmda, pmdv;
 	pte_t 	*ptea, ptev;
 
@@ -212,8 +294,10 @@ vtop_arm64(unsigned long vaddr)
 		return NOT_PADDR;
 	}
 
-	puda = pud_offset(pgda, vaddr);
-	pmda = pmd_offset(puda, vaddr);
+	pudv.pgd = pgdv;
+	puda = (pud_t *)pgda;
+
+	pmda = pmd_offset(puda, &pudv, vaddr);
 	if (!readmem(VADDR, (unsigned long long)pmda, &pmdv, sizeof(pmdv))) {
 		ERRMSG("Can't read pmd\n");
 		return NOT_PADDR;
@@ -239,7 +323,8 @@ vtop_arm64(unsigned long vaddr)
 		break;
 	case PMD_TYPE_SECT:
 		/* 1GB section */
-		paddr = (pmd_val(pmdv) & PMD_MASK) + (vaddr & (PMD_SIZE - 1));
+		paddr = (pmd_val(pmdv) & (PMD_MASK & PMD_SECTION_MASK))
+					+ (vaddr & (PMD_SIZE - 1));
 		break;
 	}
 

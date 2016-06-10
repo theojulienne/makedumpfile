@@ -39,6 +39,7 @@ off_t offset_to_pt_load_end(off_t offset);
 unsigned long long vaddr_to_paddr_general(unsigned long long vaddr);
 off_t vaddr_to_offset_slow(int fd, char *filename, unsigned long long vaddr);
 unsigned long long get_max_paddr(void);
+int closest_pt_load(unsigned long long paddr, unsigned long distance);
 
 int page_is_fractional(off_t page_offset);
 
@@ -61,6 +62,11 @@ int get_pt_load(int idx,
 	unsigned long long *phys_end,
 	unsigned long long *virt_start,
 	unsigned long long *virt_end);
+int get_pt_load_extents(int idx,
+	unsigned long long *phys_start,
+	unsigned long long *phys_end,
+	off_t *file_offset,
+	off_t *file_size);
 unsigned int get_num_pt_loads(void);
 
 void set_nr_cpus(int num);

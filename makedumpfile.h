@@ -44,6 +44,10 @@
 #include "print_info.h"
 #include "sadump_mod.h"
 #include <pthread.h>
+#include <semaphore.h>
+
+#define VMEMMAPSTART 0xffffea0000000000UL
+#define BITS_PER_WORD 64
 
 /*
  * Result of command
@@ -51,8 +55,6 @@
 #define COMPLETED	(0)
 #define FAILED		(1)
 #define WRONG_RELEASE	(2)	/* utsname.release does not match. */
-#define ANALYSIS_FAILED	(3)	/* detected illegal page descriptor. */
-#define OUTPUT_FAILED	(4)	/* detected an output error. */
 
 /*
  * Type of memory management
@@ -152,8 +154,6 @@ test_bit(int nr, unsigned long addr)
 #define isLRU(flags)		test_bit(NUMBER(PG_lru), flags)
 #define isPrivate(flags)	test_bit(NUMBER(PG_private), flags)
 #define isCompoundHead(flags)   (!!((flags) & NUMBER(PG_head_mask)))
-#define isHugetlb(dtor)         ((SYMBOL(free_huge_page) != NOT_FOUND_SYMBOL) \
-				 && (SYMBOL(free_huge_page) == dtor))
 #define isSwapCache(flags)	test_bit(NUMBER(PG_swapcache), flags)
 #define isHWPOISON(flags)	(test_bit(NUMBER(PG_hwpoison), flags) \
 				&& (NUMBER(PG_hwpoison) != NOT_FOUND_NUMBER))
@@ -456,7 +456,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(4, 1, 0)/* linux-4.1.0 */
+#define LATEST_VERSION		KERNEL_VERSION(4, 5, 3)/* linux-4.5.3 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -497,32 +497,14 @@ do { \
 #define VMALLOC_END		(info->vmalloc_end)
 #define VMEMMAP_START		(info->vmemmap_start)
 #define VMEMMAP_END		(info->vmemmap_end)
+#define PMASK			(0x7ffffffffffff000UL)
 
 #ifdef __aarch64__
-#define CONFIG_ARM64_PGTABLE_LEVELS	2
-#define CONFIG_ARM64_VA_BITS		42
-#define CONFIG_ARM64_64K_PAGES		1
-
-/* Currently we only suport following defines based on above
- * config definitions.
- * TODOs: We need to find a way to get above defines dynamically and
- * then to support following definitions based on that
- */
-
-#if CONFIG_ARM64_PGTABLE_LEVELS == 2
-#define ARM64_PGTABLE_LEVELS	2
-#endif
-
-#if CONFIG_ARM64_VA_BITS == 42
-#define VA_BITS			42
-#endif
-
-#ifdef CONFIG_ARM64_64K_PAGES
-#define PAGE_SHIFT		16
-#endif
-
-#define KVBASE_MASK		(0xffffffffffffffffUL << (VA_BITS - 1))
-#define KVBASE			(SYMBOL(_stext) & KVBASE_MASK)
+int get_va_bits_arm64(void);
+#define ARM64_PGTABLE_LEVELS	get_pgtable_level_arm64()
+#define VA_BITS			get_va_bits_arm64()
+#define PAGE_SHIFT		get_page_shift_arm64()
+#define KVBASE			VMALLOC_START
 #endif /* aarch64 */
 
 #ifdef __arm__
@@ -610,15 +592,20 @@ do { \
 #define PGDIR_SIZE		(1UL << PGDIR_SHIFT)
 #define PGDIR_MASK		(~(PGDIR_SIZE - 1))
 #define PTRS_PER_PGD		(512)
+#define PGD_SHIFT		(39)
+#define PUD_SHIFT		(30)
 #define PMD_SHIFT		(21)
 #define PMD_SIZE		(1UL << PMD_SHIFT)
 #define PMD_MASK		(~(PMD_SIZE - 1))
+#define PTRS_PER_PUD		(512)
 #define PTRS_PER_PMD		(512)
 #define PTRS_PER_PTE		(512)
 #define PTE_SHIFT		(12)
 
 #define pml4_index(address) (((address) >> PML4_SHIFT) & (PTRS_PER_PML4 - 1))
 #define pgd_index(address)  (((address) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
+#define pgd4_index(address) (((address) >> PGD_SHIFT) & (PTRS_PER_PGD - 1))
+#define pud_index(address)  (((address) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
 #define pmd_index(address)  (((address) >> PMD_SHIFT) & (PTRS_PER_PMD - 1))
 #define pte_index(address)  (((address) >> PTE_SHIFT) & (PTRS_PER_PTE - 1))
 
@@ -803,6 +790,7 @@ do { \
  */
 static inline int stub_true() { return TRUE; }
 static inline int stub_true_ul(unsigned long x) { return TRUE; }
+static inline int stub_false() { return FALSE; }
 #ifdef __aarch64__
 int get_phys_base_arm64(void);
 int get_machdep_info_arm64(void);
@@ -810,6 +798,7 @@ unsigned long long vaddr_to_paddr_arm64(unsigned long vaddr);
 int get_versiondep_info_arm64(void);
 int get_xen_basic_info_arm64(void);
 int get_xen_info_arm64(void);
+#define find_vmemmap()		stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_arm64(X)
 #define get_phys_base()		get_phys_base_arm64()
 #define get_machdep_info()	get_machdep_info_arm64()
@@ -823,6 +812,7 @@ int get_xen_info_arm64(void);
 int get_phys_base_arm(void);
 int get_machdep_info_arm(void);
 unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
+#define find_vmemmap()		stub_false()
 #define get_phys_base()		get_phys_base_arm()
 #define get_machdep_info()	get_machdep_info_arm()
 #define get_versiondep_info()	stub_true()
@@ -834,6 +824,7 @@ unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
 int get_machdep_info_x86(void);
 int get_versiondep_info_x86(void);
 unsigned long long vaddr_to_paddr_x86(unsigned long vaddr);
+#define find_vmemmap()		stub_false()
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_x86()
 #define get_versiondep_info()	get_versiondep_info_x86()
@@ -847,6 +838,7 @@ int get_phys_base_x86_64(void);
 int get_machdep_info_x86_64(void);
 int get_versiondep_info_x86_64(void);
 unsigned long long vaddr_to_paddr_x86_64(unsigned long vaddr);
+#define find_vmemmap()		find_vmemmap_x86_64()
 #define get_phys_base()		get_phys_base_x86_64()
 #define get_machdep_info()	get_machdep_info_x86_64()
 #define get_versiondep_info()	get_versiondep_info_x86_64()
@@ -858,6 +850,7 @@ unsigned long long vaddr_to_paddr_x86_64(unsigned long vaddr);
 int get_machdep_info_ppc64(void);
 int get_versiondep_info_ppc64(void);
 unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
+#define find_vmemmap()		stub_false()
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc64()
 #define get_versiondep_info()	get_versiondep_info_ppc64()
@@ -868,6 +861,7 @@ unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
 #ifdef __powerpc32__ /* powerpc32 */
 int get_machdep_info_ppc(void);
 unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
+#define find_vmemmap()		stub_false()
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc()
 #define get_versiondep_info()	stub_true()
@@ -879,6 +873,7 @@ unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
 int get_machdep_info_s390x(void);
 unsigned long long vaddr_to_paddr_s390x(unsigned long vaddr);
 int is_iomem_phys_addr_s390x(unsigned long addr);
+#define find_vmemmap()		stub_false()
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_s390x()
 #define get_versiondep_info()	stub_true()
@@ -890,6 +885,7 @@ int is_iomem_phys_addr_s390x(unsigned long addr);
 int get_phys_base_ia64(void);
 int get_machdep_info_ia64(void);
 unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
+#define find_vmemmap()		stub_false()
 #define get_machdep_info()	get_machdep_info_ia64()
 #define get_phys_base()		get_phys_base_ia64()
 #define get_versiondep_info()	stub_true()
@@ -974,10 +970,11 @@ typedef unsigned long long int ulonglong;
  * for parallel process
  */
 
-#define PAGE_DATA_NUM	(50)
+#define PAGE_FLAG_NUM	(20)
+#define PAGE_DATA_NUM	(5)
 #define WAIT_TIME	(60 * 10)
 #define PTHREAD_FAIL	((void *)-2)
-#define NUM_BUFFERS	(50)
+#define THREAD_REGION	(200 * 1024)
 
 struct mmap_cache {
 	char	*mmap_buf;
@@ -985,28 +982,33 @@ struct mmap_cache {
 	off_t   mmap_end_offset;
 };
 
+enum {
+	FLAG_UNUSED,
+	FLAG_READY,
+	FLAG_FILLING
+};
+struct page_flag {
+	mdf_pfn_t pfn;
+	char zero;
+	char ready;
+	short index;
+	struct page_flag *next;
+};
+
 struct page_data
 {
-	mdf_pfn_t pfn;
-	int dumpable;
-	int zero;
-	unsigned int flags;
 	long size;
 	unsigned char *buf;
-	pthread_mutex_t mutex;
-	/*
-	 * whether the page_data is ready to be consumed
-	 */
-	int ready;
+	int flags;
+	int used;
 };
 
 struct thread_args {
 	int thread_num;
 	unsigned long len_buf_out;
-	mdf_pfn_t start_pfn, end_pfn;
-	int page_data_num;
 	struct cycle *cycle;
 	struct page_data *page_data_buf;
+	struct page_flag *page_flag_buf;
 };
 
 /*
@@ -1097,6 +1099,7 @@ struct DumpInfo {
 	int		flag_use_printk_log; /* did we read printk_log symbol name? */
 	int		flag_nospace;	     /* the flag of "No space on device" error */
 	int		flag_vmemmap;        /* kernel supports vmemmap address space */
+	int		flag_excludevm;      /* -e - excluding unused vmemmap pages */
 	unsigned long	vaddr_for_vtop;      /* virtual address for debugging */
 	long		page_size;           /* size of page */
 	long		page_shift;
@@ -1295,11 +1298,12 @@ struct DumpInfo {
 	pthread_t **threads;
 	struct thread_args *kdump_thread_args;
 	struct page_data *page_data_buf;
+	struct page_flag **page_flag_buf;
+	sem_t page_flag_buf_sem;
 	pthread_rwlock_t usemmap_rwlock;
 	mdf_pfn_t current_pfn;
 	pthread_mutex_t current_pfn_mutex;
-	mdf_pfn_t consumed_pfn;
-	pthread_mutex_t consumed_pfn_mutex;
+	pthread_mutex_t page_data_mutex;
 	pthread_mutex_t filter_mutex;
 };
 extern struct DumpInfo		*info;
@@ -1484,6 +1488,9 @@ struct offset_table {
 		long	lru;
 		long	_mapcount;
 		long	private;
+		long	compound_dtor;
+		long	compound_order;
+		long	compound_head;
 	} page;
 	struct mem_section {
 		long	section_mem_map;
@@ -1679,6 +1686,7 @@ struct number_table {
 	long	KERNEL_IMAGE_SIZE;
 	long	SECTION_SIZE_BITS;
 	long	MAX_PHYSMEM_BITS;
+	long    HUGETLB_PAGE_DTOR;
 };
 
 struct srcfile_table {
@@ -1686,6 +1694,51 @@ struct srcfile_table {
 	 * typedef
 	 */
 	char	pud_t[LEN_SRCFILE];
+};
+
+/*
+ * This structure records where the vmemmap page structures reside, and which
+ * pfn's are represented by those page structures.
+ * The actual pages containing the page structures are 2MB pages, so their pfn's
+ * will all be multiples of 0x200.
+ * The page structures are 7 64-bit words in length (0x38) so they overlap the
+ * 2MB boundaries. Each page structure represents a 4k page.
+ * A 4k page is here defined to be represented on a 2MB page if its page structure
+ * 'ends' on that page (even if it began on the page before).
+ */
+struct vmap_pfns {
+       struct vmap_pfns *next;
+       struct vmap_pfns *prev;
+       /*
+	* These (start/end) are literal pfns of 2MB pages on which the page
+	* structures reside, not start and end+1.
+	*/
+       unsigned long vmap_pfn_start;
+       unsigned long vmap_pfn_end;
+       /*
+	* These (start/end) are literal pfns represented on these pages, not
+	* start and end+1.
+	* The starting page struct is at least partly on the first page; the
+	* ending page struct is entirely on the last page.
+	*/
+       unsigned long rep_pfn_start;
+       unsigned long rep_pfn_end;
+};
+
+/* for saving a list of pfns to a buffer, and then to a file if necessary */
+struct save_control {
+       int sc_fd;
+       char *sc_filename;
+       char *sc_buf;
+       long sc_buflen; /* length of buffer never changes */
+       long sc_bufposition; /* offset of next slot for write, or next to be read */
+       long sc_filelen; /* length of valid data written */
+       long sc_fileposition; /* offset in file of next entry to be read */
+};
+/* one entry in the buffer and file */
+struct sc_entry {
+       unsigned long startpfn;
+       unsigned long numpfns;
 };
 
 extern struct symbol_table	symbol_table;
@@ -2013,6 +2066,7 @@ struct elf_prstatus {
 #define OPT_DEBUG               'D'
 #define OPT_DUMP_LEVEL          'd'
 #define OPT_ELF_DUMPFILE        'E'
+#define OPT_EXCLUDE_UNUSED_VM	'e'
 #define OPT_FLATTEN             'F'
 #define OPT_FORCE               'f'
 #define OPT_GENERATE_VMCOREINFO 'g'
