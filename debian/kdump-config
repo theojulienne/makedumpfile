@@ -49,7 +49,7 @@ KDUMP_DUMP_DMESG=${KDUMP_DUMP_DMESG:=1}
 KDUMP_DIR="/var/lib/kdump"
 KDUMP_NUM_DUMPS=${KDUMP_NUM_DUMPS:=0}
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
-KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll maxcpus=1 nousb systemd.unit=kdump-tools.service"}
+KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service"}
 KDUMP_KERNEL_HOOK="/etc/kernel/postinst.d/kdump-tools"
 [ -d $KDUMP_COREDIR ] || mkdir -p $KDUMP_COREDIR ;
 
