@@ -1,3 +1,65 @@
+makedumpfile (1:1.6.0-1) sid; urgency=medium
+
+  * New upstream version includes :
+    o Exclude page structures of non-dumped pages
+     - Add the new option "-e" to exclude the page structures which correspond
+       to excluded pages. This option will bring a great performance, but it 
+       will harm analyticity a little bit. Please see the note below:
+    
+       NOTE: If you specify this option, crash will show the message below
+             and the 'kmem' command will not work.
+    
+           This dumpfile is incomplete because the page structures associated
+           with excluded pages may also be excluded.  This may cause the crash
+           session to fail entirely, may cause commands to fail (most notably
+           the "kmem" command), or may result in unpredictable runtime behavior.
+    
+       Now this option supports only x86_64.
+    
+    o Support new kernels
+     - The supported kernel is updated to 4.5 in this version.
+    
+    Changelog:
+    o New feature
+        - [PATCH V7] Exclude page structures of non-dumped pages. (by Cliff Wickman) 46176a9
+        - [PATCH 1/4] ARM64: Refactor code to support multiple page level. (by Pratyush Anand) 28a4729
+        - [PATCH 2/4] ARM64: Decide VA Bits on the basis of _stext symbol value. (by Pratyush Anand) a93301d
+        - [PATCH 3/4] ARM64: Fix KVBASE. (by Pratyush Anand) ec85257
+        - [PATCH 4/4] ARM64: Fix for ARM64 3 level translation tables. (by Sameer Goel) c92a63d
+    
+    o Bugfix
+        - [PATCH] Fix bitmap buffer release code. (by Atsushi Kumagai) 7556e69
+        - [PATCH 1/3] Keep segment memory size when re-filtering ELF dumps (by Petr Tesarik) 606fe8c
+        - [PATCH 2/3] Mark unstored ELF pages as filtered (by Petr Tesarik) 1cdabcd
+        - [PATCH 3/3] Rewrite readpage_elf (by Petr Tesarik) 7a7cebc
+        - [PATCH] Looking for page.compound_order/compound_dtor to exclude hugepages
+          (by Atsushi Kumagai) 5bc1f52
+        - [PATCH] Skip examining compound tail pages (by Atsushi Kumagai) 13b4233
+        - [PATCH] arm64: fix two level pmd calculation (by Pratyush Anand) 6759c72
+        - [PATCH] Fix module core base and size offset for kernel v4.5 (by Pratyush Anand) fa6a75a
+        - [PATCH] Fix deleted macro by mistake for ia64 (by Atsushi Kumagai) cfe652e
+        - [PATCH] Fix boundary value bug for checking memory holes (by Atsushi Kumagai) 11a6dae
+        - [PATCH] Skip null entries to walk page tables correctly (by Atsushi Kumagai) ecf7a13
+        - [PATCH] Fix read data corruption for multi thread feature. (by Atsushi Kumagai) ae848e8
+    
+    o Cleanup
+        - [PATCH] Remove useless definitions of return value. (by Atsushi Kumagai) 3d32567
+        - [PATCH] Clean up the in-accurate message printing about mmap (by Baoquan He) 2b8c001
+        - [PATCH v8] Improve the performance of --num-threads -d 31 (by Zhou Wenjian) dfa2447
+        - [PATCH] Fix compilation warning (by Pratyush Anand) 7dda810
+        - [PATCH] Fix compilation warnings for x86_64 (by Atsushi Kumagai) 27b5fb5
+        - [PATCH] Fix man page to add -p option (by Atsushi Kumagai) e444aad
+        - [PATCH] Fix compilation warning (by Andrey Skvortsov) 484c6b1
+
+  * Debian specific enhancements :
+    [kdump-tools] Add missing unit to crashkernel parameter
+    [d/p/0001-Remove-libebl-linkage.patch] Adapt to new upstream vers.
+
+  * Debian specific modifications dropped :
+    d/p/0003-support-kernel-4.2.patch] Fixed upstream
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Fri, 10 Jun 2016 11:33:13 +0200
+
 makedumpfile (1:1.5.9-7) sid; urgency=medium
 
   * [d/rules] Lower kexec-tools dependency to -2
