@@ -526,7 +526,8 @@ function kdump_load()
 		sed -r -e 's/(^| )crashkernel=[^ ]*//g' \
 		       -e 's/(^| )hugepages=[^ ]*//g' \
 		       -e 's/(^| )hugepagesz=[^ ]*//g' \
-		       -e 's/(^| )abm=[^ ]*//g'`
+		       -e 's/(^| )abm=[^ ]*//g' \
+		       -e 's/"/\\\\"/'g`
 	fi
 	KDUMP_CMDLINE="$KDUMP_CMDLINE $KDUMP_CMDLINE_APPEND"
 	KEXEC_CMD="$KEXEC_CMD --command-line=\"$KDUMP_CMDLINE\""
