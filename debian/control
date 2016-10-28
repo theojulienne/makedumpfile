@@ -6,7 +6,7 @@ Standards-Version: 3.9.8
 Build-Depends: debhelper (>= 7.0.50), libelf-dev, libz-dev, libdw-dev (>= 0.141-2ubuntu1),
                 libbz2-dev, liblzo2-dev, dh-systemd (>=1.5), po-debconf
 Vcs-Git: git://git.debian.org/collab-maint/makedumpfile.git
-Vcs-Browser: http://git.debian.org/?p=collab-maint/makedumpfile.git;a=summary
+Vcs-Browser: https://anonscm.debian.org/gitweb/?p=collab-maint/makedumpfile.git
 
 Package: makedumpfile
 Architecture: i386 amd64 powerpc ia64 x32 arm64 armel armhf ppc64el s390x
