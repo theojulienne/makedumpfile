@@ -1,3 +1,14 @@
+makedumpfile (1:1.6.0-2.1) unstable; urgency=medium
+
+  * Non-maintainer upload.
+  * Import fixes from ubuntu
+  * Remove hugepages/hugepagesz from kdump's cmdline. (LP: #1634132)
+    - Chris J Arges <chris.j.arges@ubuntu.com>
+  * Build on arm64. LP: #1238110
+    - <doko@ubuntu.com>
+
+ -- Riku Voipio <riku.voipio@linaro.org>  Fri, 28 Oct 2016 16:06:52 +0300
+
 makedumpfile (1:1.6.0-2) sid; urgency=medium
 
   * define_stampdir() : Loop on hostname -I for 5 sec to get IP address
