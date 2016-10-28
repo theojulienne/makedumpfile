@@ -1,24 +1,37 @@
+makedumpfile (1:1.6.0-2) sid; urgency=medium
+
+  * define_stampdir() : Loop on hostname -I for 5 sec to get IP address
+    if HOSTTAG=ip. The network stack may not be ready when kdump-config runs.
+    Give it some time before reverting HOSTTAG to hostname if an IP address
+    cannot be found. (LP: #1599561)
+
+  * debian/rules : drop the dh_installinit override
+    Uses a syntax which is no longer supported and generate an error on
+    install. (LP: #1599491)
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Fri, 15 Jul 2016 17:25:33 +0200
+
 makedumpfile (1:1.6.0-1) sid; urgency=medium
 
   * New upstream version includes :
     o Exclude page structures of non-dumped pages
      - Add the new option "-e" to exclude the page structures which correspond
-       to excluded pages. This option will bring a great performance, but it 
+       to excluded pages. This option will bring a great performance, but it
        will harm analyticity a little bit. Please see the note below:
-    
+
        NOTE: If you specify this option, crash will show the message below
              and the 'kmem' command will not work.
-    
+
            This dumpfile is incomplete because the page structures associated
            with excluded pages may also be excluded.  This may cause the crash
            session to fail entirely, may cause commands to fail (most notably
            the "kmem" command), or may result in unpredictable runtime behavior.
-    
+
        Now this option supports only x86_64.
-    
+
     o Support new kernels
      - The supported kernel is updated to 4.5 in this version.
-    
+
     Changelog:
     o New feature
         - [PATCH V7] Exclude page structures of non-dumped pages. (by Cliff Wickman) 46176a9
@@ -26,7 +39,7 @@ makedumpfile (1:1.6.0-1) sid; urgency=medium
         - [PATCH 2/4] ARM64: Decide VA Bits on the basis of _stext symbol value. (by Pratyush Anand) a93301d
         - [PATCH 3/4] ARM64: Fix KVBASE. (by Pratyush Anand) ec85257
         - [PATCH 4/4] ARM64: Fix for ARM64 3 level translation tables. (by Sameer Goel) c92a63d
-    
+
     o Bugfix
         - [PATCH] Fix bitmap buffer release code. (by Atsushi Kumagai) 7556e69
         - [PATCH 1/3] Keep segment memory size when re-filtering ELF dumps (by Petr Tesarik) 606fe8c
@@ -41,7 +54,7 @@ makedumpfile (1:1.6.0-1) sid; urgency=medium
         - [PATCH] Fix boundary value bug for checking memory holes (by Atsushi Kumagai) 11a6dae
         - [PATCH] Skip null entries to walk page tables correctly (by Atsushi Kumagai) ecf7a13
         - [PATCH] Fix read data corruption for multi thread feature. (by Atsushi Kumagai) ae848e8
-    
+
     o Cleanup
         - [PATCH] Remove useless definitions of return value. (by Atsushi Kumagai) 3d32567
         - [PATCH] Clean up the in-accurate message printing about mmap (by Baoquan He) 2b8c001

@@ -594,9 +594,26 @@ function define_stampdir()
 	elif [ "$HOSTTAG" = "hostname" ];then
 		echo "$KDUMP_COREDIR/$(hostname)-$STAMP"
 	else
-		THIS_HOST="$(hostname -I)"
-		set -- $THIS_HOST
-		THIS_HOST=$1
+		# Looping to give time to network to settle
+		typeset -i counter=0
+		while (( counter < 5));do
+			THIS_HOST="$(hostname -I)"
+			set -- $THIS_HOST
+			THIS_HOST=$1
+			if [ -z "$THIS_HOST" ]; then
+				sleep 1
+				((counter+=1))
+			else
+				break
+			fi
+		done
+		if [ -z "$THIS_HOST" ]; then
+			# Send log msg to stderr to avoid polluting
+			# the result of the function
+			log_failure_msg "Unable to get IP from network" >&2
+			log_action_msg "Reverting to HOSTTAG=hostname" >&2
+			THIS_HOST="$(hostname)"
+		fi
 		echo "$KDUMP_COREDIR/$THIS_HOST-$STAMP"
 	fi
 }
