@@ -1,0 +1,48 @@
+Description: Fix readpage_elf: Attempt to read non-existent page
+ page_offset can always be calculated as 'virtual - physical' for a direct
+ mapping area on x86. Therefore, remove the version dependent calculation
+ and use this method.
+Author: Baoquan He <bhe@redhat.com>
+Origin: https://sourceforge.net/p/makedumpfile/code/ci/0c9dd01d8ee2e4ec1821a11f5e174fdba56012b8/
+Bug: https://bugs.debian.org/cgi-bin/bugreport.cgi?bug=842019
+---
+--- a/arch/x86_64.c
++++ b/arch/x86_64.c
+@@ -44,6 +44,24 @@
+ 	return NOT_FOUND_LONG_VALUE;
+ }
+
++static int
++get_page_offset_x86_64(void)
++{
++	int i;
++	unsigned long long phys_start;
++	unsigned long long virt_start;
++
++	for (i = 0; get_pt_load(i, &phys_start, NULL, &virt_start, NULL); i++) {
++		if (virt_start >= __START_KERNEL_map) {
++			info->page_offset = virt_start - phys_start;
++			return TRUE;
++		}
++	}
++
++	ERRMSG("Can't get any pt_load to calculate page offset.\n");
++	return FALSE;
++}
++
+ int
+ get_phys_base_x86_64(void)
+ {
+@@ -159,10 +177,8 @@
+ 	else
+ 		info->max_physmem_bits  = _MAX_PHYSMEM_BITS_2_6_31;
+
+-	if (info->kernel_version < KERNEL_VERSION(2, 6, 27))
+-		info->page_offset = __PAGE_OFFSET_ORIG;
+-	else
+-		info->page_offset = __PAGE_OFFSET_2_6_27;
++	if (!get_page_offset_x86_64())
++		return FALSE;
+
+ 	if (info->kernel_version < KERNEL_VERSION(2, 6, 31)) {
+ 		info->vmalloc_start = VMALLOC_START_ORIG;
