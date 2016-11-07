@@ -3,7 +3,7 @@ Section: devel
 Priority: optional
 Maintainer: Louis Bouchard <louis.bouchard@ubuntu.com>
 Standards-Version: 3.9.8
-Build-Depends: debhelper (>= 7.0.50), libelf-dev, libz-dev, libdw-dev (>= 0.141-2ubuntu1),
+Build-Depends: debhelper (>= 9), libelf-dev, libz-dev, libdw-dev (>= 0.141-2ubuntu1),
                 libbz2-dev, liblzo2-dev, dh-systemd (>=1.5), po-debconf
 Vcs-Git: git://git.debian.org/collab-maint/makedumpfile.git
 Vcs-Browser: https://anonscm.debian.org/gitweb/?p=collab-maint/makedumpfile.git
