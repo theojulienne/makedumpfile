@@ -1,3 +1,38 @@
+makedumpfile (1:1.6.0-3) sid; urgency=medium
+
+  * d/p/0003-PATCH-v2-Support-_count-_refcount-rename-in-struct-p.patch,
+    d/p/0004-fix-readpage_elf-attempt-to-read-non-existent-page.patch
+    Fix makedumpfile failure on 4.8 kernels.
+     - Makedumpfile will exit on error with the following message :
+       get_mem_map: Can't distinguish the memory type. (LP: #1626269)
+     - Fix readpage_elf: Attempt to read non-existent page errors after
+       previous patch is applied (Closes: #842019)
+
+  [ Robert Collins ]
+  * Support Hyper-V hypervisors.
+    Per https://support.microsoft.com/en-us/kb/2858695 the ata_piix driver
+    will attempt to create a second connection to the hypervisor
+    while the original kernel is still connected, which fails.(Closes: #824525)
+
+  * Add translation files for :
+    [ Adriano Rafael Gomes ]
+    - Brazilian Portuguese (Closes: #834935)
+    [ Frans Spiesschaert ]
+    - Dutch (Closes: #834609)
+    [ Jean-Pierre Giraud ]
+    - French (Closes: #832006)
+
+  [ Rinat ]
+  * Fix double-quote handling in /proc/cmdline
+    Parsing of the cmdline would fail if double-quotes are encountered
+    in /proc/cmdine (i.e. like when things like "acpi_osi=!Windows 2012"
+    are found in the cmdline). (Closes: #835600)
+
+  * Raise debian compatibility level to 9
+  * Fix spelling error in debian/control
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Mon, 07 Nov 2016 11:56:10 +0100
+
 makedumpfile (1:1.6.0-2.1) unstable; urgency=medium
 
   * Non-maintainer upload.
