@@ -89,7 +89,8 @@ KDUMP_COREDIR="/var/crash"
 # NFS -     Hostname and mount point of the NFS server configured to receive
 #           the crash dump. The syntax must be {HOSTNAME}:{MOUNTPOINT} 
 #           (e.g. remote:/var/crash)
-#
+# NFS_TIMEO - Timeout before NFS retries a request. See man nfs(5) for details.
+# NFS_RETRANS - Number of times NFS client retries a request. See man nfs(5) for details.
 # SSH="<user at server>"
 #
 # SSH_KEY="<path>"
@@ -98,3 +99,6 @@ KDUMP_COREDIR="/var/crash"
 # 
 # NFS="<nfs mount>"
 #
+# NFS_TIMEO="600"
+#
+# NFS_RETRANS="3"

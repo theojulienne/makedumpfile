@@ -48,6 +48,8 @@ KDUMP_COREDIR=${KDUMP_COREDIR:=/var/crash}
 KDUMP_DUMP_DMESG=${KDUMP_DUMP_DMESG:=1}
 KDUMP_DIR="/var/lib/kdump"
 KDUMP_NUM_DUMPS=${KDUMP_NUM_DUMPS:=0}
+NFS_TIMEO=${NFS_TIMEO:=600}
+NFS_RETRANS=${NFS_RETRANS:=3}
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
 KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service ata_piix.prefer_ms_hyperv=0"}
 KDUMP_KERNEL_HOOK="/etc/kernel/postinst.d/kdump-tools"
@@ -128,6 +130,8 @@ function kdump_show()
 	fi
 	if [ -n "$NFS" ]; then
 		echo "NFS:              $NFS"
+		echo "NFS_TIMEO:        ${NFS_TIMEO:=600}"
+		echo "NFS_RETRANS       ${NFS_RETRANS:=3}"
 	fi
 
 	if [ -n "$SSH" ] || [ -n "$NFS" ]; then
@@ -643,7 +647,7 @@ function kdump_save_core()
 	#
 	if [ -n "$NFS" ];then
 		log_action_msg "Mounting NFS mountpoint $NFS ..."
-		mount -t nfs -o nolock -o tcp -o soft -o timeo=5 -o retrans=5 $NFS $KDUMP_COREDIR
+		mount -t nfs -o nolock -o tcp -o soft -o timeo=${NFS_TIMEO} -o retrans=${NFS_RETRANS} $NFS $KDUMP_COREDIR
 		ERROR=$?
 		if [ $ERROR -ne 0 ];then
 			log_failure_msg "$NAME: Unable to mount remote NFS directory $NFS. Cannot save core"
