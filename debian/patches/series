@@ -1,4 +1,2 @@
 0001-Remove-libebl-linkage.patch
 0002-adapt-makefile-to-debian.patch
-0003-PATCH-v2-Support-_count-_refcount-rename-in-struct-p.patch
-0004-fix-readpage_elf-attempt-to-read-non-existent-page.patch
