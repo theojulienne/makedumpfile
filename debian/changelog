@@ -1,3 +1,16 @@
+makedumpfile (1:1.6.0-4) unstable; urgency=medium
+
+  * Turn hardcoded timeo and retrans NFS options into parameters that
+    can be modified in /etc/default/kdump-tools. Also use the NFS defaults
+    (timeo=600, retrans=3) for these parameters. Make those values visible
+    in the 'show' command if NFS is configured (Closes: 847920)
+
+  * Add translation file for :
+    [ Chris Leick <c.leick@vollbio.de> ]
+    - German (Closes: 842494)
+
+ -- Louis Bouchard <louis.bouchard@ubuntu.com>  Mon, 12 Dec 2016 12:32:29 +0100
+
 makedumpfile (1:1.6.0-3) sid; urgency=medium
 
   * d/p/0003-PATCH-v2-Support-_count-_refcount-rename-in-struct-p.patch,
