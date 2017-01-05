@@ -57,7 +57,7 @@ may still be required.  Specifically:
 
    B) x86 and x86_64
       Some systems can take advantage of the nmi watchdog.  Add 
-      nmi_watchdog=1 to the boot commandline to turn on the watchdog.
+      nmi_watchdog=panic to the boot commandline to turn on the watchdog.
       The nmi interrupt will call panic if activated.
 
    C) ia64
