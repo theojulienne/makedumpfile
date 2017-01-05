@@ -64,3 +64,7 @@ may still be required.  Specifically:
       some systems may need KDUMP_KEXEC_ARGS="--noio".  Use this
       if the system hangs after a panic, but before the kdump kernel 
       begins to boot.
+6. Magic SysRq key can be used to trigger a crash
+   You can manually trigger a kernel crash by using the magic SysRq
+   key. SysRq usage is described in details in the kernel documentation
+   (https://www.kernel.org/doc/html/latest/admin-guide/sysrq.html)
