@@ -21,17 +21,6 @@
 extern struct vmap_pfns *gvmem_pfns;
 extern int nr_gvmem_pfns;
 
-int
-is_vmalloc_addr_x86_64(ulong vaddr)
-{
-	/*
-	 *  vmalloc, virtual memmap, and module space as VMALLOC space.
-	 */
-	return ((vaddr >= VMALLOC_START && vaddr <= VMALLOC_END)
-	    || (vaddr >= VMEMMAP_START && vaddr <= VMEMMAP_END)
-	    || (vaddr >= MODULES_VADDR && vaddr <= MODULES_END));
-}
-
 static unsigned long
 get_xen_p2m_mfn(void)
 {
@@ -42,6 +31,24 @@ get_xen_p2m_mfn(void)
 		return info->xen_crash_info.v1->
 			dom0_pfn_to_mfn_frame_list_list;
 	return NOT_FOUND_LONG_VALUE;
+}
+
+static int
+get_page_offset_x86_64(void)
+{
+	int i;
+	unsigned long long phys_start;
+	unsigned long long virt_start;
+
+	for (i = 0; get_pt_load(i, &phys_start, NULL, &virt_start, NULL); i++) {
+		if (virt_start < __START_KERNEL_map) {
+			info->page_offset = virt_start - phys_start;
+			return TRUE;
+		}
+	}
+
+	ERRMSG("Can't get any pt_load to calculate page offset.\n");
+	return FALSE;
 }
 
 int
@@ -55,10 +62,21 @@ get_phys_base_x86_64(void)
 	 * Get the relocatable offset
 	 */
 	info->phys_base = 0; /* default/traditional */
+	if (NUMBER(phys_base) != NOT_FOUND_NUMBER) {
+		info->phys_base = NUMBER(phys_base);
+		return TRUE;
+	}
+
+	/* linux-2.6.21 or older don't have phys_base, should be set to 0. */
+	if (!has_vmcoreinfo()) {
+		SYMBOL_INIT(phys_base, "phys_base");
+		if (SYMBOL(phys_base) == NOT_FOUND_SYMBOL) {
+			return TRUE;
+		}
+	}
 
 	for (i = 0; get_pt_load(i, &phys_start, NULL, &virt_start, NULL); i++) {
-		if ((virt_start >= __START_KERNEL_map) &&
-		    !(is_vmalloc_addr_x86_64(virt_start))) {
+		if (virt_start >= __START_KERNEL_map) {
 
 			info->phys_base = phys_start -
 			    (virt_start & ~(__START_KERNEL_map));
@@ -159,19 +177,13 @@ get_versiondep_info_x86_64(void)
 	else
 		info->max_physmem_bits  = _MAX_PHYSMEM_BITS_2_6_31;
 
-	if (info->kernel_version < KERNEL_VERSION(2, 6, 27))
-		info->page_offset = __PAGE_OFFSET_ORIG;
-	else
-		info->page_offset = __PAGE_OFFSET_2_6_27;
+	if (!get_page_offset_x86_64())
+		return FALSE;
 
 	if (info->kernel_version < KERNEL_VERSION(2, 6, 31)) {
-		info->vmalloc_start = VMALLOC_START_ORIG;
-		info->vmalloc_end   = VMALLOC_END_ORIG;
 		info->vmemmap_start = VMEMMAP_START_ORIG;
 		info->vmemmap_end   = VMEMMAP_END_ORIG;
 	} else {
-		info->vmalloc_start = VMALLOC_START_2_6_31;
-		info->vmalloc_end   = VMALLOC_END_2_6_31;
 		info->vmemmap_start = VMEMMAP_START_2_6_31;
 		info->vmemmap_end   = VMEMMAP_END_2_6_31;
 	}
@@ -196,9 +208,9 @@ vtop4_x86_64(unsigned long vaddr)
 	/*
 	 * Get PGD.
 	 */
-	page_dir  = SYMBOL(init_level4_pgt);
+	page_dir = SYMBOL(init_level4_pgt) - __START_KERNEL_map + info->phys_base;
 	page_dir += pml4_index(vaddr) * sizeof(unsigned long);
-	if (!readmem(VADDR, page_dir, &pml4, sizeof pml4)) {
+	if (!readmem(PADDR, page_dir, &pml4, sizeof pml4)) {
 		ERRMSG("Can't get pml4 (page_dir:%lx).\n", page_dir);
 		return NOT_PADDR;
 	}
@@ -267,38 +279,6 @@ vtop4_x86_64(unsigned long vaddr)
 		return NOT_PADDR;
 	}
 	return (pte & ENTRY_MASK) + PAGEOFFSET(vaddr);
-}
-
-unsigned long long
-vaddr_to_paddr_x86_64(unsigned long vaddr)
-{
-	unsigned long phys_base;
-	unsigned long long paddr;
-
-	/*
-	 * Check the relocatable kernel.
-	 */
-	if (SYMBOL(phys_base) != NOT_FOUND_SYMBOL)
-		phys_base = info->phys_base;
-	else
-		phys_base = 0;
-
-	if (is_vmalloc_addr_x86_64(vaddr)) {
-		if ((paddr = vtop4_x86_64(vaddr)) == NOT_PADDR) {
-			ERRMSG("Can't convert a virtual address(%lx) to " \
-			    "physical address.\n", vaddr);
-			return NOT_PADDR;
-		}
-	} else if (vaddr >= __START_KERNEL_map) {
-		paddr = vaddr - __START_KERNEL_map + phys_base;
-
-	} else {
-		if (is_xen_memory())
-			paddr = vaddr - PAGE_OFFSET_XEN_DOM0;
-		else
-			paddr = vaddr - PAGE_OFFSET;
-	}
-	return paddr;
 }
 
 /*

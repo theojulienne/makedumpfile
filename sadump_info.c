@@ -213,6 +213,8 @@ sadump_copy_1st_bitmap_from_memory(void)
 	char buf[si->sh_memory->block_size];
 	off_t offset_page;
 	unsigned long bitmap_offset, bitmap_len;
+	mdf_pfn_t pfn, pfn_bitmap1;
+	extern mdf_pfn_t pfn_memhole;
 
 	bitmap_offset =	si->sub_hdr_offset + sh->block_size*sh->sub_hdr_size;
 	bitmap_len = sh->block_size * sh->bitmap_blocks;
@@ -249,6 +251,13 @@ sadump_copy_1st_bitmap_from_memory(void)
 		}
 		offset_page += sizeof(buf);
 	}
+
+	pfn_bitmap1 = 0;
+	for (pfn = 0; pfn < info->max_mapnr; ++pfn) {
+		if (sadump_is_ram(pfn))
+			pfn_bitmap1++;
+	}
+	pfn_memhole = info->max_mapnr - pfn_bitmap1;
 
 	/*
 	 * kdump uses the first 640kB on the 2nd kernel. But both
@@ -832,11 +841,20 @@ sadump_initialize_bitmap_memory(void)
 		       strerror(errno));
 		return FALSE;
 	}
+
 	bmp->fd = info->fd_memory;
 	bmp->file_name = info->name_memory;
 	bmp->no_block = -1;
-	memset(bmp->buf, 0, BUFSIZE_BITMAP);
 	bmp->offset = dumpable_bitmap_offset;
+
+	bmp->buf = malloc(BUFSIZE_BITMAP);
+	if (!bmp->buf) {
+		ERRMSG("Can't allocate memory for the memory-bitmap's buffer. %s\n",
+		       strerror(errno));
+		free(bmp);
+		return FALSE;
+	}
+	memset(bmp->buf, 0, BUFSIZE_BITMAP);
 
 	max_section = divideup(si->max_mapnr, SADUMP_PF_SECTION_NUM);
 
@@ -844,6 +862,7 @@ sadump_initialize_bitmap_memory(void)
 	if (block_table == NULL) {
 		ERRMSG("Can't allocate memory for the block_table. %s\n",
 		       strerror(errno));
+		free(bmp->buf);
 		free(bmp);
 		return FALSE;
 	}
@@ -870,8 +889,17 @@ sadump_initialize_bitmap_memory(void)
 	bmp->fd = info->fd_memory;
 	bmp->file_name = info->name_memory;
 	bmp->no_block = -1;
-	memset(bmp->buf, 0, BUFSIZE_BITMAP);
 	bmp->offset = si->sub_hdr_offset + sh->block_size * sh->sub_hdr_size;
+
+	bmp->buf = malloc(BUFSIZE_BITMAP);
+	if (!bmp->buf) {
+		ERRMSG("Can't allocate memory for the memory-bitmap's buffer. %s\n",
+		       strerror(errno));
+		free(bmp);
+		return FALSE;
+	}
+	memset(bmp->buf, 0, BUFSIZE_BITMAP);
+
 	si->ram_bitmap = bmp;
 
 	/*
@@ -1825,6 +1853,7 @@ sadump_add_diskset_info(char *name_memory)
 	}
 
 	si->diskset_info[si->num_disks - 1].name_memory = name_memory;
+	si->diskset_info[si->num_disks - 1].fd_memory = -1;
 
 	return TRUE;
 }
@@ -1889,7 +1918,7 @@ free_sadump_info(void)
 		int i;
 
 		for (i = 1; i < si->num_disks; ++i) {
-			if (si->diskset_info[i].fd_memory)
+			if (si->diskset_info[i].fd_memory >= 0)
 				close(si->diskset_info[i].fd_memory);
 			if (si->diskset_info[i].sph_memory)
 				free(si->diskset_info[i].sph_memory);
@@ -1904,6 +1933,11 @@ free_sadump_info(void)
 		fclose(si->file_elf_note);
 	if (si->cpu_online_mask_buf)
 		free(si->cpu_online_mask_buf);
+	if (si->ram_bitmap) {
+		if (si->ram_bitmap->buf)
+			free(si->ram_bitmap->buf);
+		free(si->ram_bitmap);
+	}
 }
 
 void

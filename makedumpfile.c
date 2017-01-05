@@ -1365,7 +1365,7 @@ open_dump_bitmap(void)
 
 	/* Unnecessary to open */
 	if (!info->working_dir && !info->flag_reassemble && !info->flag_refiltering
-	    && !info->flag_sadump && !info->flag_mem_usage)
+	    && !info->flag_sadump && !info->flag_mem_usage && info->flag_cyclic)
 		return TRUE;
 
 	tmpname = getenv("TMPDIR");
@@ -1480,9 +1480,6 @@ open_files_for_creating_dumpfile(void)
 	if (!open_dump_memory())
 		return FALSE;
 
-	if (!open_dump_bitmap())
-		return FALSE;
-
 	return TRUE;
 }
 
@@ -1510,7 +1507,6 @@ get_symbol_info(void)
 	SYMBOL_INIT(init_level4_pgt, "init_level4_pgt");
 	SYMBOL_INIT(vmlist, "vmlist");
 	SYMBOL_INIT(vmap_area_list, "vmap_area_list");
-	SYMBOL_INIT(phys_base, "phys_base");
 	SYMBOL_INIT(node_online_map, "node_online_map");
 	SYMBOL_INIT(node_states, "node_states");
 	SYMBOL_INIT(node_memblk, "node_memblk");
@@ -1567,6 +1563,7 @@ get_symbol_info(void)
 
 	SYMBOL_INIT(cpu_pgd, "cpu_pgd");
 	SYMBOL_INIT(demote_segment_4k, "demote_segment_4k");
+	SYMBOL_INIT(cur_cpu_spec, "cur_cpu_spec");
 
 	return TRUE;
 }
@@ -1579,7 +1576,14 @@ get_structure_info(void)
 	 */
 	SIZE_INIT(page, "page");
 	OFFSET_INIT(page.flags, "page", "flags");
-	OFFSET_INIT(page._count, "page", "_count");
+	OFFSET_INIT(page._refcount, "page", "_refcount");
+	if (OFFSET(page._refcount) == NOT_FOUND_STRUCTURE) {
+		info->flag_use_count = TRUE;
+		OFFSET_INIT(page._refcount, "page", "_count");
+	} else {
+		info->flag_use_count = FALSE;
+	}
+
 	OFFSET_INIT(page.mapping, "page", "mapping");
 	OFFSET_INIT(page._mapcount, "page", "_mapcount");
 	OFFSET_INIT(page.private, "page", "private");
@@ -1689,7 +1693,25 @@ get_structure_info(void)
 		OFFSET(module.core_size) += core_layout;
 	}
 	OFFSET_INIT(module.module_init, "module", "module_init");
+	if (OFFSET(module.module_init) == NOT_FOUND_STRUCTURE) {
+		/* for kernel version 4.5 and above */
+		long init_layout;
+
+		OFFSET_INIT(module.module_init, "module", "init_layout");
+		init_layout = OFFSET(module.module_init);
+		OFFSET_INIT(module.module_init, "module_layout", "base");
+		OFFSET(module.module_init) += init_layout;
+	}
 	OFFSET_INIT(module.init_size, "module", "init_size");
+	if (OFFSET(module.init_size) == NOT_FOUND_STRUCTURE) {
+		/* for kernel version 4.5 and above */
+		long init_layout;
+
+		OFFSET_INIT(module.init_size, "module", "init_layout");
+		init_layout = OFFSET(module.init_size);
+		OFFSET_INIT(module.init_size, "module_layout", "size");
+		OFFSET(module.init_size) += init_layout;
+	}
 
 	ENUM_NUMBER_INIT(NR_FREE_PAGES, "NR_FREE_PAGES");
 	ENUM_NUMBER_INIT(N_ONLINE, "N_ONLINE");
@@ -1924,6 +1946,12 @@ get_structure_info(void)
 	SIZE_INIT(mmu_psize_def, "mmu_psize_def");
 	OFFSET_INIT(mmu_psize_def.shift, "mmu_psize_def", "shift");
 
+	/*
+	 * Get offsets of the cpu_spec's members.
+	 */
+	SIZE_INIT(cpu_spec, "cpu_spec");
+	OFFSET_INIT(cpu_spec.mmu_features, "cpu_spec", "mmu_features");
+
 	return TRUE;
 }
 
@@ -1966,14 +1994,6 @@ get_value_for_old_linux(void)
 			NUMBER(PAGE_BUDDY_MAPCOUNT_VALUE) =
 			PAGE_BUDDY_MAPCOUNT_VALUE_v2_6_39_to_latest_version;
 	}
-#ifdef __x86_64__
-	if (NUMBER(KERNEL_IMAGE_SIZE) == NOT_FOUND_NUMBER) {
-		if (info->kernel_version < KERNEL_VERSION(2, 6, 26))
-			NUMBER(KERNEL_IMAGE_SIZE) = KERNEL_IMAGE_SIZE_ORIG;
-		else
-			NUMBER(KERNEL_IMAGE_SIZE) = KERNEL_IMAGE_SIZE_2_6_26;
-	}
-#endif
 	if (SIZE(pageflags) == NOT_FOUND_STRUCTURE) {
 		if (info->kernel_version >= KERNEL_VERSION(2, 6, 27))
 			SIZE(pageflags) =
@@ -2044,7 +2064,7 @@ get_mem_type(void)
 
 	if ((SIZE(page) == NOT_FOUND_STRUCTURE)
 	    || (OFFSET(page.flags) == NOT_FOUND_STRUCTURE)
-	    || (OFFSET(page._count) == NOT_FOUND_STRUCTURE)
+	    || (OFFSET(page._refcount) == NOT_FOUND_STRUCTURE)
 	    || (OFFSET(page.mapping) == NOT_FOUND_STRUCTURE)) {
 		ret = NOT_FOUND_MEMTYPE;
 	} else if ((((SYMBOL(node_data) != NOT_FOUND_SYMBOL)
@@ -2105,7 +2125,6 @@ write_vmcoreinfo_data(void)
 	WRITE_SYMBOL("init_level4_pgt", init_level4_pgt);
 	WRITE_SYMBOL("vmlist", vmlist);
 	WRITE_SYMBOL("vmap_area_list", vmap_area_list);
-	WRITE_SYMBOL("phys_base", phys_base);
 	WRITE_SYMBOL("node_online_map", node_online_map);
 	WRITE_SYMBOL("node_states", node_states);
 	WRITE_SYMBOL("node_data", node_data);
@@ -2126,6 +2145,7 @@ write_vmcoreinfo_data(void)
 	WRITE_SYMBOL("mmu_vmemmap_psize", mmu_vmemmap_psize);
 	WRITE_SYMBOL("cpu_pgd", cpu_pgd);
 	WRITE_SYMBOL("demote_segment_4k", demote_segment_4k);
+	WRITE_SYMBOL("cur_cpu_spec", cur_cpu_spec);
 	WRITE_SYMBOL("free_huge_page", free_huge_page);
 
 	/*
@@ -2151,7 +2171,10 @@ write_vmcoreinfo_data(void)
 	 * write the member offset of 1st kernel
 	 */
 	WRITE_MEMBER_OFFSET("page.flags", page.flags);
-	WRITE_MEMBER_OFFSET("page._count", page._count);
+	if (info->flag_use_count)
+		WRITE_MEMBER_OFFSET("page._count", page._refcount);
+	else
+		WRITE_MEMBER_OFFSET("page._refcount", page._refcount);
 	WRITE_MEMBER_OFFSET("page.mapping", page.mapping);
 	WRITE_MEMBER_OFFSET("page.lru", page.lru);
 	WRITE_MEMBER_OFFSET("page._mapcount", page._mapcount);
@@ -2198,6 +2221,7 @@ write_vmcoreinfo_data(void)
 	    vmemmap_backing.virt_addr);
 	WRITE_MEMBER_OFFSET("vmemmap_backing.list", vmemmap_backing.list);
 	WRITE_MEMBER_OFFSET("mmu_psize_def.shift", mmu_psize_def.shift);
+	WRITE_MEMBER_OFFSET("cpu_spec.mmu_features", cpu_spec.mmu_features);
 
 	if (SYMBOL(node_data) != NOT_FOUND_SYMBOL)
 		WRITE_ARRAY_LENGTH("node_data", node_data);
@@ -2226,9 +2250,14 @@ write_vmcoreinfo_data(void)
 	WRITE_NUMBER("PG_hwpoison", PG_hwpoison);
 
 	WRITE_NUMBER("PAGE_BUDDY_MAPCOUNT_VALUE", PAGE_BUDDY_MAPCOUNT_VALUE);
-	WRITE_NUMBER("KERNEL_IMAGE_SIZE", KERNEL_IMAGE_SIZE);
+	WRITE_NUMBER("phys_base", phys_base);
 
 	WRITE_NUMBER("HUGETLB_PAGE_DTOR", HUGETLB_PAGE_DTOR);
+#ifdef __aarch64__
+	WRITE_NUMBER("VA_BITS", VA_BITS);
+	WRITE_NUMBER_UNSIGNED("PHYS_OFFSET", PHYS_OFFSET);
+	WRITE_NUMBER_UNSIGNED("kimage_voffset", kimage_voffset);
+#endif
 
 	/*
 	 * write the source file of 1st kernel
@@ -2378,6 +2407,40 @@ read_vmcoreinfo_symbol(char *str_symbol)
 	return symbol;
 }
 
+unsigned long
+read_vmcoreinfo_ulong(char *str_structure)
+{
+	long data = NOT_FOUND_LONG_VALUE;
+	char buf[BUFSIZE_FGETS], *endp;
+	unsigned int i;
+
+	if (fseek(info->file_vmcoreinfo, 0, SEEK_SET) < 0) {
+		ERRMSG("Can't seek the vmcoreinfo file(%s). %s\n",
+		    info->name_vmcoreinfo, strerror(errno));
+		return INVALID_STRUCTURE_DATA;
+	}
+
+	while (fgets(buf, BUFSIZE_FGETS, info->file_vmcoreinfo)) {
+		i = strlen(buf);
+		if (!i)
+			break;
+		if (buf[i - 1] == '\n')
+			buf[i - 1] = '\0';
+		if (strncmp(buf, str_structure, strlen(str_structure)) == 0) {
+			data = strtoul(buf + strlen(str_structure), &endp, 10);
+			if (strlen(endp) != 0)
+				data = strtoul(buf + strlen(str_structure), &endp, 16);
+			if ((data == LONG_MAX) || strlen(endp) != 0) {
+				ERRMSG("Invalid data in %s: %s",
+				    info->name_vmcoreinfo, buf);
+				return INVALID_STRUCTURE_DATA;
+			}
+			break;
+		}
+	}
+	return data;
+}
+
 long
 read_vmcoreinfo_long(char *str_structure)
 {
@@ -2399,6 +2462,8 @@ read_vmcoreinfo_long(char *str_structure)
 			buf[i - 1] = '\0';
 		if (strncmp(buf, str_structure, strlen(str_structure)) == 0) {
 			data = strtol(buf + strlen(str_structure), &endp, 10);
+			if (strlen(endp) != 0)
+				data = strtol(buf + strlen(str_structure), &endp, 16);
 			if ((data == LONG_MAX) || strlen(endp) != 0) {
 				ERRMSG("Invalid data in %s: %s",
 				    info->name_vmcoreinfo, buf);
@@ -2454,7 +2519,6 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("init_level4_pgt", init_level4_pgt);
 	READ_SYMBOL("vmlist", vmlist);
 	READ_SYMBOL("vmap_area_list", vmap_area_list);
-	READ_SYMBOL("phys_base", phys_base);
 	READ_SYMBOL("node_online_map", node_online_map);
 	READ_SYMBOL("node_states", node_states);
 	READ_SYMBOL("node_data", node_data);
@@ -2475,6 +2539,7 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("mmu_vmemmap_psize", mmu_vmemmap_psize);
 	READ_SYMBOL("cpu_pgd", cpu_pgd);
 	READ_SYMBOL("demote_segment_4k", demote_segment_4k);
+	READ_SYMBOL("cur_cpu_spec", cur_cpu_spec);
 	READ_SYMBOL("free_huge_page", free_huge_page);
 
 	READ_STRUCTURE_SIZE("page", page);
@@ -2491,7 +2556,13 @@ read_vmcoreinfo(void)
 
 
 	READ_MEMBER_OFFSET("page.flags", page.flags);
-	READ_MEMBER_OFFSET("page._count", page._count);
+	READ_MEMBER_OFFSET("page._refcount", page._refcount);
+	if (OFFSET(page._refcount) == NOT_FOUND_STRUCTURE) {
+		info->flag_use_count = TRUE;
+		READ_MEMBER_OFFSET("page._count", page._refcount);
+	} else {
+		info->flag_use_count = FALSE;
+	}
 	READ_MEMBER_OFFSET("page.mapping", page.mapping);
 	READ_MEMBER_OFFSET("page.lru", page.lru);
 	READ_MEMBER_OFFSET("page._mapcount", page._mapcount);
@@ -2527,6 +2598,7 @@ read_vmcoreinfo(void)
 	    vmemmap_backing.virt_addr);
 	READ_MEMBER_OFFSET("vmemmap_backing.list", vmemmap_backing.list);
 	READ_MEMBER_OFFSET("mmu_psize_def.shift", mmu_psize_def.shift);
+	READ_MEMBER_OFFSET("cpu_spec.mmu_features", cpu_spec.mmu_features);
 
 	READ_STRUCTURE_SIZE("printk_log", printk_log);
 	if (SIZE(printk_log) != NOT_FOUND_STRUCTURE) {
@@ -2566,7 +2638,12 @@ read_vmcoreinfo(void)
 	READ_SRCFILE("pud_t", pud_t);
 
 	READ_NUMBER("PAGE_BUDDY_MAPCOUNT_VALUE", PAGE_BUDDY_MAPCOUNT_VALUE);
-	READ_NUMBER("KERNEL_IMAGE_SIZE", KERNEL_IMAGE_SIZE);
+	READ_NUMBER("phys_base", phys_base);
+#ifdef __aarch64__
+	READ_NUMBER("VA_BITS", VA_BITS);
+	READ_NUMBER_UNSIGNED("PHYS_OFFSET", PHYS_OFFSET);
+	READ_NUMBER_UNSIGNED("kimage_voffset", kimage_voffset);
+#endif
 
 	READ_NUMBER("HUGETLB_PAGE_DTOR", HUGETLB_PAGE_DTOR);
 
@@ -3696,10 +3773,10 @@ free_for_parallel()
 		return;
 
 	for (i = 0; i < info->num_threads; i++) {
-		if (FD_MEMORY_PARALLEL(i) > 0)
+		if (FD_MEMORY_PARALLEL(i) >= 0)
 			close(FD_MEMORY_PARALLEL(i));
 
-		if (FD_BITMAP_MEMORY_PARALLEL(i) > 0)
+		if (FD_BITMAP_MEMORY_PARALLEL(i) >= 0)
 			close(FD_BITMAP_MEMORY_PARALLEL(i));
 	}
 }
@@ -4004,13 +4081,13 @@ out:
 void
 initialize_bitmap(struct dump_bitmap *bitmap)
 {
-	if (info->fd_bitmap) {
+	if (info->fd_bitmap >= 0) {
 		bitmap->fd        = info->fd_bitmap;
 		bitmap->file_name = info->name_bitmap;
 		bitmap->no_block  = -1;
 		memset(bitmap->buf, 0, BUFSIZE_BITMAP);
 	} else {
-		bitmap->fd        = 0;
+		bitmap->fd        = -1;
 		bitmap->file_name = NULL;
 		bitmap->no_block  = -1;
 		memset(bitmap->buf, 0, info->bufsize_cyclic);
@@ -4120,7 +4197,7 @@ set_bitmap_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, int val, struct cyc
 int
 set_bitmap(struct dump_bitmap *bitmap, mdf_pfn_t pfn, int val, struct cycle *cycle)
 {
-	if (bitmap->fd) {
+	if (bitmap->fd >= 0) {
 		return set_bitmap_file(bitmap, pfn, val);
 	} else {
 		return set_bitmap_buffer(bitmap, pfn, val, cycle);
@@ -4136,7 +4213,7 @@ sync_bitmap(struct dump_bitmap *bitmap)
 	/*
 	 * The bitmap doesn't have the fd, it's a on-memory bitmap.
 	 */
-	if (bitmap->fd == 0)
+	if (bitmap->fd < 0)
 		return TRUE;
 	/*
 	 * The bitmap buffer is not dirty, and it is not necessary
@@ -5369,7 +5446,7 @@ create_1st_bitmap_buffer(struct cycle *cycle)
 int
 create_1st_bitmap(struct cycle *cycle)
 {
-	if (info->bitmap1->fd) {
+	if (info->bitmap1->fd >= 0) {
 		return create_1st_bitmap_file();
 	} else {
 		return create_1st_bitmap_buffer(cycle);
@@ -5380,7 +5457,7 @@ static inline int
 is_in_segs(unsigned long long paddr)
 {
 	if (info->flag_refiltering || info->flag_sadump) {
-		if (info->bitmap1->fd == 0) {
+		if (info->bitmap1->fd < 0) {
 			initialize_1st_bitmap(info->bitmap1);
 			create_1st_bitmap_file();
 		}
@@ -5615,7 +5692,7 @@ __exclude_unnecessary_pages(unsigned long mem_map,
 		pcache  = page_cache + (index_pg * SIZE(page));
 
 		flags   = ULONG(pcache + OFFSET(page.flags));
-		_count  = UINT(pcache + OFFSET(page._count));
+		_count  = UINT(pcache + OFFSET(page._refcount));
 		mapping = ULONG(pcache + OFFSET(page.mapping));
 
 		if (OFFSET(page.compound_order) != NOT_FOUND_STRUCTURE) {
@@ -5838,7 +5915,7 @@ copy_bitmap_file(void)
 int
 copy_bitmap(void)
 {
-	if (info->fd_bitmap) {
+	if (info->fd_bitmap >= 0) {
 		return copy_bitmap_file();
 	} else {
 		return copy_bitmap_buffer();
@@ -6279,7 +6356,7 @@ prepare_bitmap1_buffer(void)
 		return FALSE;
 	}
 
-	if (info->fd_bitmap) {
+	if (info->fd_bitmap >= 0) {
 		if ((info->bitmap1->buf = (char *)malloc(BUFSIZE_BITMAP)) == NULL) {
 			ERRMSG("Can't allocate memory for the 1st bitmaps's buffer. %s\n",
 			       strerror(errno));
@@ -6318,7 +6395,7 @@ prepare_bitmap2_buffer(void)
 		       strerror(errno));
 		return FALSE;
 	}
-	if (info->fd_bitmap) {
+	if (info->fd_bitmap >= 0) {
 		if ((info->bitmap2->buf = (char *)malloc(BUFSIZE_BITMAP)) == NULL) {
 			ERRMSG("Can't allocate memory for the 2nd bitmaps's buffer. %s\n",
 			       strerror(errno));
@@ -7548,7 +7625,7 @@ kdump_thread_function_cyclic(void *arg) {
 
 	fd_memory = FD_MEMORY_PARALLEL(kdump_thread_args->thread_num);
 
-	if (info->fd_bitmap) {
+	if (info->fd_bitmap >= 0) {
 		bitmap_parallel.buf = malloc(BUFSIZE_BITMAP);
 		if (bitmap_parallel.buf == NULL){
 			ERRMSG("Can't allocate memory for bitmap_parallel.buf. %s\n",
@@ -7594,7 +7671,7 @@ kdump_thread_function_cyclic(void *arg) {
 			pthread_mutex_lock(&info->current_pfn_mutex);
 			for (pfn = info->current_pfn; pfn < cycle->end_pfn; pfn++) {
 				dumpable = is_dumpable(
-					info->fd_bitmap ? &bitmap_parallel : info->bitmap2,
+					info->fd_bitmap >= 0 ? &bitmap_parallel : info->bitmap2,
 					pfn,
 					cycle);
 				if (dumpable)
@@ -7689,7 +7766,7 @@ next:
 	retval = NULL;
 
 fail:
-	if (bitmap_memory_parallel.fd > 0)
+	if (bitmap_memory_parallel.fd >= 0)
 		close(bitmap_memory_parallel.fd);
 	if (bitmap_parallel.buf != NULL)
 		free(bitmap_parallel.buf);
@@ -8427,7 +8504,7 @@ out:
 
 int
 write_kdump_bitmap1(struct cycle *cycle) {
-	if (info->bitmap1->fd) {
+	if (info->bitmap1->fd >= 0) {
 		return write_kdump_bitmap1_file();
 	} else {
 		return write_kdump_bitmap1_buffer(cycle);
@@ -8436,7 +8513,7 @@ write_kdump_bitmap1(struct cycle *cycle) {
 
 int
 write_kdump_bitmap2(struct cycle *cycle) {
-	if (info->bitmap2->fd) {
+	if (info->bitmap2->fd >= 0) {
 		return write_kdump_bitmap2_file();
 	} else {
 		return write_kdump_bitmap2_buffer(cycle);
@@ -8563,9 +8640,10 @@ close_vmcoreinfo(void)
 void
 close_dump_memory(void)
 {
-	if ((info->fd_memory = close(info->fd_memory)) < 0)
+	if (close(info->fd_memory) < 0)
 		ERRMSG("Can't close the dump memory(%s). %s\n",
 		    info->name_memory, strerror(errno));
+	info->fd_memory = -1;
 }
 
 void
@@ -8574,21 +8652,22 @@ close_dump_file(void)
 	if (info->flag_flatten)
 		return;
 
-	if ((info->fd_dumpfile = close(info->fd_dumpfile)) < 0)
+	if (close(info->fd_dumpfile) < 0)
 		ERRMSG("Can't close the dump file(%s). %s\n",
 		    info->name_dumpfile, strerror(errno));
+	info->fd_dumpfile = -1;
 }
 
 void
 close_dump_bitmap(void)
 {
-	if (!info->working_dir && !info->flag_reassemble && !info->flag_refiltering
-	    && !info->flag_sadump && !info->flag_mem_usage)
+	if (info->fd_bitmap < 0)
 		return;
 
-	if ((info->fd_bitmap = close(info->fd_bitmap)) < 0)
+	if (close(info->fd_bitmap) < 0)
 		ERRMSG("Can't close the bitmap file(%s). %s\n",
 		    info->name_bitmap, strerror(errno));
+	info->fd_bitmap = -1;
 	free(info->name_bitmap);
 	info->name_bitmap = NULL;
 }
@@ -8597,16 +8676,18 @@ void
 close_kernel_file(void)
 {
 	if (info->name_vmlinux) {
-		if ((info->fd_vmlinux = close(info->fd_vmlinux)) < 0) {
+		if (close(info->fd_vmlinux) < 0) {
 			ERRMSG("Can't close the kernel file(%s). %s\n",
 			    info->name_vmlinux, strerror(errno));
 		}
+		info->fd_vmlinux = -1;
 	}
 	if (info->name_xen_syms) {
-		if ((info->fd_xen_syms = close(info->fd_xen_syms)) < 0) {
+		if (close(info->fd_xen_syms) < 0) {
 			ERRMSG("Can't close the kernel file(%s). %s\n",
 			    info->name_xen_syms, strerror(errno));
 		}
+		info->fd_xen_syms = -1;
 	}
 }
 
@@ -9708,6 +9789,9 @@ create_dumpfile(void)
 	if (!initial())
 		return FALSE;
 
+	if (!open_dump_bitmap())
+		return FALSE;
+
 	/* create an array of translations from pfn to vmemmap pages */
 	if (info->flag_excludevm) {
 		if (find_vmemmap() == FAILED) {
@@ -10168,7 +10252,7 @@ reassemble_kdump_header(void)
 
 	ret = TRUE;
 out:
-	if (fd > 0)
+	if (fd >= 0)
 		close(fd);
 	free(buf_bitmap);
 
@@ -10178,7 +10262,7 @@ out:
 int
 reassemble_kdump_pages(void)
 {
-	int i, fd = 0, ret = FALSE;
+	int i, fd = -1, ret = FALSE;
 	off_t offset_first_ph, offset_ph_org, offset_eraseinfo;
 	off_t offset_data_new, offset_zero_page = 0;
 	mdf_pfn_t pfn, start_pfn, end_pfn;
@@ -10302,7 +10386,7 @@ reassemble_kdump_pages(void)
 			offset_data_new += pd.size;
 		}
 		close(fd);
-		fd = 0;
+		fd = -1;
 	}
 	if (!write_cache_bufsz(&cd_pd))
 		goto out;
@@ -10345,7 +10429,7 @@ reassemble_kdump_pages(void)
 		size_eraseinfo += SPLITTING_SIZE_EI(i);
 
 		close(fd);
-		fd = 0;
+		fd = -1;
 	}
 	if (size_eraseinfo) {
 		if (!write_cache_bufsz(&cd_data))
@@ -10366,7 +10450,7 @@ out:
 
 	if (data)
 		free(data);
-	if (fd > 0)
+	if (fd >= 0)
 		close(fd);
 
 	return ret;
@@ -10878,6 +10962,9 @@ int show_mem_usage(void)
 	if (!initial())
 		return FALSE;
 
+	if (!open_dump_bitmap())
+		return FALSE;
+
 	if (!prepare_bitmap_buffer())
 		return FALSE;
 
@@ -10939,6 +11026,11 @@ main(int argc, char *argv[])
 		    strerror(errno));
 		goto out;
 	}
+	info->fd_vmlinux = -1;
+	info->fd_xen_syms = -1;
+	info->fd_memory = -1;
+	info->fd_dumpfile = -1;
+	info->fd_bitmap = -1;
 	initialize_tables();
 
 	/*
@@ -11188,6 +11280,7 @@ main(int argc, char *argv[])
 		}
 		if (info->flag_split) {
 			for (i = 0; i < info->num_dumpfile; i++) {
+				SPLITTING_FD_BITMAP(i) = -1;
 				if (!check_dump_file(SPLITTING_DUMPFILE(i)))
 					goto out;
 			}
@@ -11229,13 +11322,16 @@ out:
 			free(info->kh_memory);
 		if (info->valid_pages)
 			free(info->valid_pages);
-		if (info->bitmap_memory)
+		if (info->bitmap_memory) {
+			if (info->bitmap_memory->buf)
+				free(info->bitmap_memory->buf);
 			free(info->bitmap_memory);
-		if (info->fd_memory)
+		}
+		if (info->fd_memory >= 0)
 			close(info->fd_memory);
-		if (info->fd_dumpfile)
+		if (info->fd_dumpfile >= 0)
 			close(info->fd_dumpfile);
-		if (info->fd_bitmap)
+		if (info->fd_bitmap >= 0)
 			close(info->fd_bitmap);
 		if (vt.node_online_map != NULL)
 			free(vt.node_online_map);

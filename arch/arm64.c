@@ -35,100 +35,85 @@ typedef struct {
 	pud_t pud;
 } pmd_t;
 
-#define pud_offset(pgd, vaddr) 	((pud_t *)pgd)
+typedef struct {
+	unsigned long pte;
+} pte_t;
+
+static int pgtable_level;
+static int va_bits;
+static unsigned long kimage_voffset;
+
+#define SZ_4K			(4 * 1024)
+#define SZ_16K			(16 * 1024)
+#define SZ_64K			(64 * 1024)
+#define SZ_128M			(128 * 1024 * 1024)
 
 #define pgd_val(x)		((x).pgd)
 #define pud_val(x)		(pgd_val((x).pgd))
 #define pmd_val(x)		(pud_val((x).pud))
-
-#define PUD_SHIFT		PGDIR_SHIFT
-#define PUD_SIZE		(1UL << PUD_SHIFT)
-
-typedef struct {
-	unsigned long pte;
-} pte_t;
 #define pte_val(x)		((x).pte)
 
-#define PAGE_SIZE		(1UL << PAGE_SHIFT)
-#define PAGE_MASK		(~(PAGE_SIZE - 1))
-#define PGDIR_SHIFT		((PAGE_SHIFT - 3) * ARM64_PGTABLE_LEVELS + 3)
-#define PTRS_PER_PGD		(1 << (VA_BITS - PGDIR_SHIFT))
-#define PMD_SHIFT		((PAGE_SHIFT - 3) * 2 + 3)
-#define PTRS_PER_PTE		(1 << (PAGE_SHIFT - 3))
-#define PMD_SHIFT		((PAGE_SHIFT - 3) * 2 + 3)
+#define PAGE_MASK		(~(PAGESIZE() - 1))
+#define PGDIR_SHIFT		((PAGESHIFT() - 3) * pgtable_level + 3)
+#define PTRS_PER_PGD		(1 << (va_bits - PGDIR_SHIFT))
+#define PUD_SHIFT		get_pud_shift_arm64()
+#define PTRS_PER_PTE		(1 << (PAGESHIFT() - 3))
+#define PTRS_PER_PUD		PTRS_PER_PTE
+#define PMD_SHIFT		((PAGESHIFT() - 3) * 2 + 3)
 #define PMD_SIZE		(1UL << PMD_SHIFT)
 #define PMD_MASK		(~(PMD_SIZE - 1))
 #define PTRS_PER_PMD		PTRS_PER_PTE
 
 #define PAGE_PRESENT		(1 << 0)
 #define SECTIONS_SIZE_BITS	30
-/*
-
-* Highest possible physical address supported.
-*/
+/* Highest possible physical address supported */
 #define PHYS_MASK_SHIFT		48
 #define PHYS_MASK		((1UL << PHYS_MASK_SHIFT) - 1)
 /*
  * Remove the highest order bits that are not a part of the
  * physical address in a section
  */
-#define PMD_SECTION_MASK        ((1UL << 40) - 1)
+#define PMD_SECTION_MASK	((1UL << 40) - 1)
 
 #define PMD_TYPE_MASK		3
 #define PMD_TYPE_SECT		1
 #define PMD_TYPE_TABLE		3
 
-#define __va(paddr) 			((paddr) - info->phys_base + PAGE_OFFSET)
-#define __pa(vaddr) 			((vaddr) - PAGE_OFFSET + info->phys_base)
-
 #define pgd_index(vaddr) 		(((vaddr) >> PGDIR_SHIFT) & (PTRS_PER_PGD - 1))
 #define pgd_offset(pgdir, vaddr)	((pgd_t *)(pgdir) + pgd_index(vaddr))
 
-#define pte_index(addr) 		(((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
-#define pmd_page_vaddr(pmd)		(__va(pmd_val(pmd) & PHYS_MASK & (int32_t)PAGE_MASK))
-#define pte_offset(dir, vaddr) 		((pte_t*)pmd_page_vaddr((*dir)) + pte_index(vaddr))
-
-
-#define pmd_offset_pgtbl_lvl_2(pud, vaddr) ((pmd_t *)pud)
+#define pte_index(vaddr) 		(((vaddr) >> PAGESHIFT()) & (PTRS_PER_PTE - 1))
+#define pmd_page_paddr(pmd)		(pmd_val(pmd) & PHYS_MASK & (int32_t)PAGE_MASK)
+#define pte_offset(dir, vaddr) 		((pte_t*)pmd_page_paddr((*dir)) + pte_index(vaddr))
 
 #define pmd_index(vaddr)		(((vaddr) >> PMD_SHIFT) & (PTRS_PER_PMD - 1))
-#define pud_page_vaddr(pud)		(__va(pud_val(pud) & PHYS_MASK & (int32_t)PAGE_MASK))
-#define pmd_offset_pgtbl_lvl_3(pud, vaddr) ((pmd_t *)pud_page_vaddr((*pud)) + pmd_index(vaddr))
+#define pud_page_paddr(pud)		(pud_val(pud) & PHYS_MASK & (int32_t)PAGE_MASK)
+#define pmd_offset_pgtbl_lvl_2(pud, vaddr) ((pmd_t *)pud)
+#define pmd_offset_pgtbl_lvl_3(pud, vaddr) ((pmd_t *)pud_page_paddr((*pud)) + pmd_index(vaddr))
 
-/* kernel struct page size can be kernel version dependent, currently
- * keep it constant.
- */
-#define KERN_STRUCT_PAGE_SIZE		get_structure_size("page", DWARF_INFO_GET_STRUCT_SIZE)
+#define pud_index(vaddr)		(((vaddr) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
+#define pgd_page_paddr(pgd)		(pgd_val(pgd) & PHYS_MASK & (int32_t)PAGE_MASK)
 
-#define ALIGN(x, a) 			(((x) + (a) - 1) & ~((a) - 1))
-#define PFN_DOWN(x)			((x) >> PAGE_SHIFT)
-#define VMEMMAP_SIZE			ALIGN((1UL << (VA_BITS - PAGE_SHIFT)) * KERN_STRUCT_PAGE_SIZE, PUD_SIZE)
-#define MODULES_END			PAGE_OFFSET
-#define MODULES_VADDR			(MODULES_END - 0x4000000)
-
-static int pgtable_level;
-static int va_bits;
-static int page_shift;
-
-int
-get_pgtable_level_arm64(void)
+static unsigned long long
+__pa(unsigned long vaddr)
 {
-	return pgtable_level;
+	if (kimage_voffset == NOT_FOUND_NUMBER ||
+			(vaddr >= PAGE_OFFSET))
+		return (vaddr - PAGE_OFFSET + info->phys_base);
+	else
+		return (vaddr - kimage_voffset);
 }
 
-int
-get_va_bits_arm64(void)
+static int
+get_pud_shift_arm64(void)
 {
-	return va_bits;
+	if (pgtable_level == 4)
+		return ((PAGESHIFT() - 3) * 3 + 3);
+	else
+		return PGDIR_SHIFT;
 }
 
-int
-get_page_shift_arm64(void)
-{
-	return page_shift;
-}
-
-pmd_t *
+static pmd_t *
 pmd_offset(pud_t *puda, pud_t *pudv, unsigned long vaddr)
 {
 	if (pgtable_level == 2) {
@@ -138,81 +123,50 @@ pmd_offset(pud_t *puda, pud_t *pudv, unsigned long vaddr)
 	}
 }
 
-#define PAGE_OFFSET_39 (0xffffffffffffffffUL << 39)
-#define PAGE_OFFSET_42 (0xffffffffffffffffUL << 42)
+static pud_t *
+pud_offset(pgd_t *pgda, pgd_t *pgdv, unsigned long vaddr)
+{
+	if (pgtable_level == 4)
+		return ((pud_t *)pgd_page_paddr((*pgdv)) + pud_index(vaddr));
+	else
+		return (pud_t *)(pgda);
+}
+
 static int calculate_plat_config(void)
 {
-	unsigned long long stext;
+	va_bits = NUMBER(VA_BITS);
 
-	/* Currently we assume that there are only two possible
-	 * configuration supported by kernel.
-	 * 1) Page Table Level:2, Page Size 64K and VA Bits 42
-	 * 1) Page Table Level:3, Page Size 4K and VA Bits 39
-	 * Ideally, we should have some mechanism to decide these values
-	 * from kernel symbols, but we have limited symbols in vmcore,
-	 * and we can not do much. So until some one comes with a better
-	 * way, we use following.
-	 */
-	stext = SYMBOL(_stext);
-
-	/* condition for minimum VA bits must be checked first and so on */
-	if ((stext & PAGE_OFFSET_39) == PAGE_OFFSET_39) {
-		pgtable_level = 3;
-		va_bits = 39;
-		page_shift = 12;
-	} else if ((stext & PAGE_OFFSET_42) == PAGE_OFFSET_42) {
+	/* derive pgtable_level as per arch/arm64/Kconfig */
+	if ((PAGESIZE() == SZ_16K && va_bits == 36) ||
+			(PAGESIZE() == SZ_64K && va_bits == 42)) {
 		pgtable_level = 2;
-		va_bits = 42;
-		page_shift = 16;
+	} else if ((PAGESIZE() == SZ_64K && va_bits == 48) ||
+			(PAGESIZE() == SZ_4K && va_bits == 39) ||
+			(PAGESIZE() == SZ_16K && va_bits == 47)) {
+		pgtable_level = 3;
+	} else if ((PAGESIZE() != SZ_64K && va_bits == 48)) {
+		pgtable_level = 4;
 	} else {
-		ERRMSG("Kernel Configuration not supported\n");
+		ERRMSG("PAGE SIZE %#lx and VA Bits %d not supported\n",
+				PAGESIZE(), va_bits);
 		return FALSE;
 	}
 
 	return TRUE;
 }
 
-static int
-is_vtop_from_page_table_arm64(unsigned long vaddr)
+unsigned long
+get_kvbase_arm64(void)
 {
-	/* If virtual address lies in vmalloc, vmemmap or module space
-	 * region then, get the physical address from page table.
-	 */
-	return ((vaddr >= VMALLOC_START && vaddr <= VMALLOC_END)
-		|| (vaddr >= VMEMMAP_START && vaddr <= VMEMMAP_END)
-		|| (vaddr >= MODULES_VADDR && vaddr <= MODULES_END));
+	return (0xffffffffffffffffUL << va_bits);
 }
 
 int
 get_phys_base_arm64(void)
 {
-	unsigned long phys_base = ULONG_MAX;
-	unsigned long long phys_start;
-	int i;
+	info->phys_base = NUMBER(PHYS_OFFSET);
 
-	if (!calculate_plat_config()) {
-		ERRMSG("Can't determine platform config values\n");
-		return FALSE;
-	}
-
-	/*
-	 * We resolve phys_base from PT_LOAD segments. LMA contains physical
-	 * address of the segment, and we use the lowest start as
-	 * phys_base.
-	 */
-	for (i = 0; get_pt_load(i, &phys_start, NULL, NULL, NULL); i++) {
-		if (phys_start < phys_base)
-			phys_base = phys_start;
-	}
-
-	if (phys_base == ULONG_MAX) {
-		ERRMSG("Can't determine phys_base\n");
-		return FALSE;
-	}
-
-	info->phys_base = phys_base;
-
-	DEBUG_MSG("phys_base    : %lx\n", phys_base);
+	DEBUG_MSG("phys_base    : %lx\n", info->phys_base);
 
 	return TRUE;
 }
@@ -220,24 +174,20 @@ get_phys_base_arm64(void)
 int
 get_machdep_info_arm64(void)
 {
+	if (!calculate_plat_config()) {
+		ERRMSG("Can't determine platform config values\n");
+		return FALSE;
+	}
+
+	kimage_voffset = NUMBER(kimage_voffset);
 	info->max_physmem_bits = PHYS_MASK_SHIFT;
 	info->section_size_bits = SECTIONS_SIZE_BITS;
-	info->page_offset = SYMBOL(_stext)
-		& (0xffffffffffffffffUL << (VA_BITS - 1));
-	info->vmalloc_start = 0xffffffffffffffffUL << VA_BITS;
-	info->vmalloc_end = PAGE_OFFSET - PUD_SIZE - VMEMMAP_SIZE - 0x10000;
-	info->vmemmap_start = VMALLOC_END + 0x10000;
-	info->vmemmap_end = VMEMMAP_START + VMEMMAP_SIZE;
+	info->page_offset = 0xffffffffffffffffUL << (va_bits - 1);
 
+	DEBUG_MSG("kimage_voffset   : %lx\n", kimage_voffset);
 	DEBUG_MSG("max_physmem_bits : %lx\n", info->max_physmem_bits);
 	DEBUG_MSG("section_size_bits: %lx\n", info->section_size_bits);
 	DEBUG_MSG("page_offset      : %lx\n", info->page_offset);
-	DEBUG_MSG("vmalloc_start    : %lx\n", info->vmalloc_start);
-	DEBUG_MSG("vmalloc_end      : %lx\n", info->vmalloc_end);
-	DEBUG_MSG("vmemmap_start    : %lx\n", info->vmemmap_start);
-	DEBUG_MSG("vmemmap_end      : %lx\n", info->vmemmap_end);
-	DEBUG_MSG("modules_start    : %lx\n", MODULES_VADDR);
-	DEBUG_MSG("modules_end      : %lx\n", MODULES_END);
 
 	return TRUE;
 }
@@ -267,17 +217,18 @@ get_versiondep_info_arm64(void)
 }
 
 /*
- * vtop_arm64() - translate arbitrary virtual address to physical
+ * vaddr_to_paddr_arm64() - translate arbitrary virtual address to physical
  * @vaddr: virtual address to translate
  *
  * Function translates @vaddr into physical address using page tables. This
  * address can be any virtual address. Returns physical address of the
  * corresponding virtual address or %NOT_PADDR when there is no translation.
  */
-static unsigned long long
-vtop_arm64(unsigned long vaddr)
+unsigned long long
+vaddr_to_paddr_arm64(unsigned long vaddr)
 {
 	unsigned long long paddr = NOT_PADDR;
+	unsigned long long swapper_phys;
 	pgd_t	*pgda, pgdv;
 	pud_t	*puda, pudv;
 	pmd_t	*pmda, pmdv;
@@ -288,17 +239,22 @@ vtop_arm64(unsigned long vaddr)
 		return NOT_PADDR;
 	}
 
-	pgda = pgd_offset(SYMBOL(swapper_pg_dir), vaddr);
-	if (!readmem(VADDR, (unsigned long long)pgda, &pgdv, sizeof(pgdv))) {
+	swapper_phys = __pa(SYMBOL(swapper_pg_dir));
+
+	pgda = pgd_offset(swapper_phys, vaddr);
+	if (!readmem(PADDR, (unsigned long long)pgda, &pgdv, sizeof(pgdv))) {
 		ERRMSG("Can't read pgd\n");
 		return NOT_PADDR;
 	}
 
-	pudv.pgd = pgdv;
-	puda = (pud_t *)pgda;
+	puda = pud_offset(pgda, &pgdv, vaddr);
+	if (!readmem(PADDR, (unsigned long long)puda, &pudv, sizeof(pudv))) {
+		ERRMSG("Can't read pud\n");
+		return NOT_PADDR;
+	}
 
 	pmda = pmd_offset(puda, &pudv, vaddr);
-	if (!readmem(VADDR, (unsigned long long)pmda, &pmdv, sizeof(pmdv))) {
+	if (!readmem(PADDR, (unsigned long long)pmda, &pmdv, sizeof(pmdv))) {
 		ERRMSG("Can't read pmd\n");
 		return NOT_PADDR;
 	}
@@ -307,7 +263,7 @@ vtop_arm64(unsigned long vaddr)
 	case PMD_TYPE_TABLE:
 		ptea = pte_offset(&pmdv, vaddr);
 		/* 64k page */
-		if (!readmem(VADDR, (unsigned long long)ptea, &ptev, sizeof(ptev))) {
+		if (!readmem(PADDR, (unsigned long long)ptea, &ptev, sizeof(ptev))) {
 			ERRMSG("Can't read pte\n");
 			return NOT_PADDR;
 		}
@@ -331,19 +287,4 @@ vtop_arm64(unsigned long vaddr)
 	return paddr;
 }
 
-unsigned long long
-vaddr_to_paddr_arm64(unsigned long vaddr)
-{
-	/*
-	 * use translation tables when a) user has explicitly requested us to
-	 * perform translation for a given address. b) virtual address lies in
-	 * vmalloc, vmemmap or modules memory region. Otherwise we assume that
-	 * the translation is done within the kernel direct mapped region.
-	 */
-	if ((info->vaddr_for_vtop == vaddr) ||
-			is_vtop_from_page_table_arm64(vaddr))
-		return vtop_arm64(vaddr);
-
-	return __pa(vaddr);
-}
 #endif /* __aarch64__ */
