@@ -39,6 +39,13 @@ cp -pr /etc/initramfs-tools "$kdumpdir" || true
 
 initramfsdir="$kdumpdir/initramfs-tools"
 
+# Add scsi_dh_* modules if in use otherwise
+# kexec reboot on multipath will fail
+# (LP: #1635597)
+for I in $(lsmod | grep scsi_dh | cut -d" " -f1);do
+	echo "${I}" >> $initramfsdir/modules
+done
+
 sed -e 's/MODULES=.*/MODULES=dep/' /etc/initramfs-tools/initramfs.conf > "$initramfsdir/initramfs.conf" || true
 if ! [ -e "$initramfsdir/initramfs.conf" ];then
 	echo >&2 "W: kdump-tools: Unable to create $initramfsdir/initramfs.conf"
