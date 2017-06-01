@@ -20,7 +20,7 @@ Description: VMcore extraction tool
  etc).
 
 Package: kdump-tools
-Architecture: all
+Architecture: i386 amd64 powerpc ia64 x32 arm64 armel armhf ppc64el s390x
 Depends: ${shlibs:Depends}, ${misc:Depends}, ${dist:Depends}, makedumpfile,
          debconf, bsdmainutils, lsb-base (>= 3.0-6)
 Description: scripts and tools for automating kdump (Linux crash dumps)
