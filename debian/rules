@@ -24,3 +24,17 @@ override_dh_install:
 		install -D -m 644 debian/kdump-tools.grub.$(DEB_HOST_ARCH) debian/kdump-tools/etc/default/grub.d/kdump-tools.cfg
 	[ -f debian/kdump-tools.grub.$(DEB_HOST_ARCH) ] || \
 		install -D -m 644 debian/kdump-tools.grub.default debian/kdump-tools/etc/default/grub.d/kdump-tools.cfg
+
+override_dh_installdeb:
+	rm -f debian/kdump-tools.maintscript
+	[ ! -f debian/kdump-tools.maintscript.$(DEB_HOST_ARCH) ] || \
+		ln -s kdump-tools.maintscript.$(DEB_HOST_ARCH) \
+		debian/kdump-tools.maintscript
+	[ -h debian/kdump-tools.maintscript ] || \
+		ln -s kdump-tools.maintscript.default \
+		debian/kdump-tools.maintscript
+	dh_installdeb
+
+override_dh_auto_clean:
+	rm -f debian/kdump-tools.maintscript
+	dh_auto_clean
