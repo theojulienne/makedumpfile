@@ -1,10 +1,15 @@
-makedumpfile (1:1.6.1-2) UNRELEASED; urgency=medium
+makedumpfile (1:1.6.1-2) sid; urgency=medium
 
+  * d/kernel-postinst-generate-initrd : Add scsi_dh_* modules if in
+    use so the system can dump a crash when root is on multipath
+    (LP: #1635597) (Closes: 862411)
+
+  [ dann frazier ]
   * Select appropriate /etc/default/grub.d/kdump-tools.cfg at build time.
     A side-effect of this is that kdump-tools is no longer Arch: all.
     (Closes: #863858)
 
- -- dann frazier <dannf@debian.org>  Wed, 31 May 2017 22:06:44 -0600
+ -- Louis Bouchard <louis@ubuntu.com>  Wed, 16 Aug 2017 16:10:01 +0200
 
 makedumpfile (1:1.6.1-1) sid; urgency=medium
 
