@@ -26,6 +26,16 @@ void
 show_version(void)
 {
 	MSG("makedumpfile: version " VERSION " (released on " RELEASE_DATE ")\n");
+#ifdef USELZO
+	MSG("lzo\tenabled\n");
+#else
+	MSG("lzo\tdisabled\n");
+#endif
+#ifdef USESNAPPY
+	MSG("snappy\tenabled\n");
+#else
+	MSG("snappy\tdisabled\n");
+#endif
 	MSG("\n");
 }
 
@@ -48,16 +58,16 @@ print_usage(void)
 	MSG("\n");
 	MSG("Usage:\n");
 	MSG("  Creating DUMPFILE:\n");
-	MSG("  # makedumpfile    [-c|-l|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE\n");
+	MSG("  # makedumpfile    [-c|-l|-p|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE\n");
 	MSG("    DUMPFILE\n");
 	MSG("\n");
 	MSG("  Creating DUMPFILE with filtered kernel data specified through filter config\n");
 	MSG("  file or eppic macro:\n");
-	MSG("  # makedumpfile    [-c|-l|-E] [-d DL] -x VMLINUX [--config FILTERCONFIGFILE]\n");
+	MSG("  # makedumpfile    [-c|-l|-p|-E] [-d DL] -x VMLINUX [--config FILTERCONFIGFILE]\n");
 	MSG("    [--eppic EPPICMACRO] VMCORE DUMPFILE\n");
 	MSG("\n");
 	MSG("  Outputting the dump data in the flattened format to the standard output:\n");
-	MSG("  # makedumpfile -F [-c|-l|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE\n");
+	MSG("  # makedumpfile -F [-c|-l|-p|-E] [-d DL] [-x VMLINUX|-i VMCOREINFO] VMCORE\n");
 	MSG("\n");
 	MSG("  Rearranging the dump data in the flattened format to a readable DUMPFILE:\n");
 	MSG("  # makedumpfile -R DUMPFILE\n");
@@ -65,6 +75,10 @@ print_usage(void)
 	MSG("  Split the dump data to multiple DUMPFILEs in parallel:\n");
 	MSG("  # makedumpfile --split [OPTION] [-x VMLINUX|-i VMCOREINFO] VMCORE DUMPFILE1\n");
 	MSG("    DUMPFILE2 [DUMPFILE3 ..]\n");
+	MSG("\n");
+	MSG("  Using multiple threads to create DUMPFILE in parallel:\n");
+	MSG("  # makedumpfile [OPTION] [-x VMLINUX|-i VMCOREINFO] --num-threads THREADNUM\n");
+	MSG("    VMCORE DUMPFILE1\n");
 	MSG("\n");
 	MSG("  Reassemble multiple DUMPFILEs:\n");
 	MSG("  # makedumpfile --reassemble DUMPFILE1 DUMPFILE2 [DUMPFILE3 ..] DUMPFILE\n");
@@ -77,14 +91,18 @@ print_usage(void)
 	MSG("\n");
 	MSG("\n");
 	MSG("  Creating DUMPFILE of Xen:\n");
-	MSG("  # makedumpfile -E [--xen-syms XEN-SYMS|--xen-vmcoreinfo VMCOREINFO] VMCORE DUMPFILE\n");
+	MSG("  # makedumpfile [-c|-l|-p|-E] [--xen-syms XEN-SYMS|--xen-vmcoreinfo VMCOREINFO]\n");
+	MSG("    VMCORE DUMPFILE\n");
+	MSG("\n");
+	MSG("  Filtering domain-0 of Xen:\n");
+	MSG("  # makedumpfile [-c|-l|-p|-E] -d DL -x vmlinux VMCORE DUMPFILE\n");
 	MSG("\n");
 	MSG("  Generating VMCOREINFO of Xen:\n");
 	MSG("  # makedumpfile -g VMCOREINFO --xen-syms XEN-SYMS\n");
 	MSG("\n");
 	MSG("\n");
 	MSG("  Creating DUMPFILE from multiple VMCOREs generated on sadump diskset configuration:\n");
-	MSG("  # makedumpfile [-c|-l] [-d DL] -x VMLINUX --diskset=VMCORE1 --diskset=VMCORE2\n");
+	MSG("  # makedumpfile [-c|-l|-p] [-d DL] -x VMLINUX --diskset=VMCORE1 --diskset=VMCORE2\n");
 	MSG("    [--diskset=VMCORE3 ..] DUMPFILE\n");
 	MSG("\n");
 	MSG("\n");
@@ -101,11 +119,11 @@ print_usage(void)
 	MSG("      marked in the following table is excluded. A user can specify multiple\n");
 	MSG("      page types by setting the sum of each page type for Dump_Level (DL).\n");
 	MSG("      The maximum of Dump_Level is 31.\n");
-	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1.\n");
+	MSG("      Note that Dump_Level for Xen dump filtering is 0 or 1 except on x86_64\n");
 	MSG("\n");
-	MSG("            |         cache    cache\n");
-	MSG("      Dump  |  zero   without  with     user    free\n");
-	MSG("      Level |  page   private  private  data    page\n");
+	MSG("            |         non-\n");
+	MSG("      Dump  |  zero   private  private  user    free\n");
+	MSG("      Level |  page   cache    cache    data    page\n");
 	MSG("     -------+---------------------------------------\n");
 	MSG("         0  |\n");
 	MSG("         1  |   X\n");
@@ -117,7 +135,7 @@ print_usage(void)
 	MSG("\n");
 	MSG("  [-E]:\n");
 	MSG("      Create DUMPFILE in the ELF format.\n");
-	MSG("      This option cannot be specified with either of -c option or -l option,\n");
+	MSG("      This option cannot be specified with the -c, -l or -p options,\n");
 	MSG("      because the ELF format does not support compressed data.\n");
 	MSG("\n");
 	MSG("  [-x VMLINUX]:\n");
@@ -171,6 +189,12 @@ print_usage(void)
 	MSG("      by the number of DUMPFILEs.\n");
 	MSG("      This feature supports only the kdump-compressed format.\n");
 	MSG("\n");
+	MSG("  [--num-threads THREADNUM]:\n");
+	MSG("      Using multiple threads to read and compress data of each page in parallel.\n");
+	MSG("      And it will reduces time for saving DUMPFILE.\n");
+	MSG("      This feature only supports creating DUMPFILE in kdump-comressed format from\n");
+	MSG("      VMCORE in kdump-compressed format or elf format.\n");
+	MSG("\n");
 	MSG("  [--reassemble]:\n");
 	MSG("      Reassemble multiple DUMPFILEs, which are created by --split option,\n");
 	MSG("      into one DUMPFILE. dumpfile1 and dumpfile2 are reassembled into dumpfile.\n");
@@ -180,9 +204,9 @@ print_usage(void)
 	MSG("      writing to output. The default value is 4.\n");
 	MSG("\n");
 	MSG("  [--cyclic-buffer BUFFER_SIZE]:\n");
-	MSG("      Specify the buffer size in kilo bytes for analysis in the cyclic mode.\n");
-	MSG("      Actually, the double of BUFFER_SIZE kilo bytes will be allocated in memory.\n");
-	MSG("      In the cyclic mode, the number of cycles is represented as:\n");
+	MSG("      Specify the buffer size in kilo bytes for bitmap data.\n");
+	MSG("      Filtering processing will be divided into multi cycles to fix the memory\n");
+	MSG("      consumption, the number of cycles is represented as:\n");
 	MSG("\n");
 	MSG("          num_of_cycles = system_memory / \n");
 	MSG("                          (BUFFER_SIZE * 1024 * bit_per_bytes * page_size)\n");
@@ -191,10 +215,17 @@ print_usage(void)
 	MSG("      By default, BUFFER_SIZE will be calculated automatically depending on\n");
 	MSG("      system memory size, so ordinary users don't need to specify this option.\n");
 	MSG("\n");
-	MSG("  [--non-cyclic]:\n");
-	MSG("      Running in the non-cyclic mode, this mode uses the old filtering logic\n");
-	MSG("      same as v1.4.4 or before.\n");
-	MSG("      If you feel the cyclic mode is too slow, please try this mode.\n");
+	MSG("  [--splitblock-size SPLITBLOCK_SIZE]:\n");
+	MSG("      Specify the splitblock size in kilo bytes for analysis with --split.\n");
+	MSG("      If --splitblock N is specified, difference of each splitted dumpfile\n");
+	MSG("      size is at most N kilo bytes.\n");
+	MSG("\n");
+	MSG("  [--work-dir]:\n");
+	MSG("      Specify the working directory for the temporary bitmap file.\n");
+	MSG("      If this option isn't specified, the bitmap will be saved on memory.\n");
+	MSG("      Filtering processing has to do 2 pass scanning to fix the memory consumption,\n");
+	MSG("      but it can be avoided by using working directory on file system.\n");
+	MSG("      So if you specify this option, the filtering speed may be bit faster.\n");
 	MSG("\n");
 	MSG("  [--non-mmap]:\n");
 	MSG("      Never use mmap(2) to read VMCORE even if it supports mmap(2).\n");
@@ -254,6 +285,15 @@ print_usage(void)
 	MSG("      extracts the dmesg log from a VMCORE and writes it to the specified\n");
 	MSG("      LOGFILE. If a VMCORE does not contain VMCOREINFO for dmesg, it is\n");
 	MSG("      necessary to specfiy [-x VMLINUX] or [-i VMCOREINFO].\n");
+	MSG("\n");
+	MSG("  [--mem-usage]:\n");
+	MSG("      This option is only for x86_64.\n");
+	MSG("      This option is used to show the page numbers of current system in different\n");
+	MSG("      use. It should be executed in 1st kernel. By the help of this, user can know\n");
+	MSG("      how many pages is dumpable when different dump_level is specified. It analyzes\n");
+	MSG("      the 'System Ram' and 'kernel text' program segment of /proc/kcore excluding\n");
+	MSG("      the crashkernel range, then calculates the page number of different kind per\n");
+	MSG("      vmcoreinfo. So currently /proc/kcore need be specified explicitly.\n");
 	MSG("\n");
 	MSG("  [-D]:\n");
 	MSG("      Print debugging message.\n");

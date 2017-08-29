@@ -20,38 +20,34 @@
 #include "cache.h"
 #include "print_info.h"
 
-struct cache_entry {
-	unsigned long long paddr;
-	void *bufptr;
-	struct cache_entry *next, *prev;
-};
-
 struct cache {
 	struct cache_entry *head, *tail;
 };
 
 /* 8 pages covers 4-level paging plus 4 data pages */
 #define CACHE_SIZE	8
-static struct cache_entry pool[CACHE_SIZE];
+static struct cache_entry entries[CACHE_SIZE];
+static struct cache_entry *pool[CACHE_SIZE];
 static int avail = CACHE_SIZE;
 
 static struct cache used, pending;
 
+static void *cachebuf;
+
 int
 cache_init(void)
 {
-	void *bufptr;
 	int i;
 
-	for (i = 0; i < CACHE_SIZE; ++i) {
-		bufptr = malloc(info->page_size);
-		if (bufptr == NULL) {
-			ERRMSG("Can't allocate memory for cache. %s\n",
-			       strerror(errno));
-			return FALSE;
-		}
-		pool[i].bufptr = bufptr;
+	cachebuf = malloc(info->page_size * CACHE_SIZE);
+	if (cachebuf == NULL) {
+		ERRMSG("Can't allocate memory for cache. %s\n",
+		       strerror(errno));
+		return FALSE;
 	}
+
+	for (i = 0; i < CACHE_SIZE; ++i)
+		pool[i] = &entries[i];
 
 	return TRUE;
 }
@@ -83,53 +79,60 @@ remove_entry(struct cache *cache, struct cache_entry *entry)
 }
 
 void *
-cache_search(unsigned long long paddr)
+cache_search(unsigned long long paddr, unsigned long length)
 {
 	struct cache_entry *entry;
-	for (entry = used.head; entry; entry = entry->next)
-		if (entry->paddr == paddr) {
+	for (entry = used.head; entry; entry = entry->next) {
+		size_t off = paddr - entry->paddr;
+		if (off < entry->buflen &&
+		    length <= entry->buflen - off) {
 			if (entry != used.head) {
 				remove_entry(&used, entry);
 				add_entry(&used, entry);
 			}
-			return entry->bufptr;
+			return entry->bufptr + off;
 		}
+	}
 
 	return NULL;		/* cache miss */
 }
 
-void *
+struct cache_entry *
 cache_alloc(unsigned long long paddr)
 {
 	struct cache_entry *entry = NULL;
+	int idx;
 
 	if (avail) {
-		entry = &pool[--avail];
-		entry->paddr = paddr;
-		add_entry(&pending, entry);
-	} else if (pending.tail) {
-		entry = pending.tail;
-		entry->paddr = paddr;
+		entry = pool[--avail];
 	} else if (used.tail) {
 		entry = used.tail;
 		remove_entry(&used, entry);
-		entry->paddr = paddr;
-		add_entry(&pending, entry);
+		if (entry->discard)
+			entry->discard(entry);
 	} else
 		return NULL;
 
-	return entry->bufptr;
+	idx = entry - entries;
+	entry->paddr = paddr;
+	entry->bufptr = cachebuf + idx * info->page_size;
+	entry->buflen = info->page_size;
+	entry->discard = NULL;
+	add_entry(&pending, entry);
+
+	return entry;
 }
 
 void
-cache_add(unsigned long long paddr)
+cache_add(struct cache_entry *entry)
 {
-	struct cache_entry *entry;
-	for (entry = pending.head; entry; entry = entry->next) {
-		if (entry->paddr == paddr) {
-			remove_entry(&pending, entry);
-			add_entry(&used, entry);
-			break;
-		}
-	}
+	remove_entry(&pending, entry);
+	add_entry(&used, entry);
+}
+
+void
+cache_free(struct cache_entry *entry)
+{
+	remove_entry(&pending, entry);
+	pool[avail++] = entry;
 }

@@ -149,6 +149,58 @@ ppc64_vmemmap_init(void)
 	return TRUE;
 }
 
+static int
+ppc64_vmalloc_init(void)
+{
+	if (info->page_size == 65536) {
+		/*
+		 * 64K pagesize
+		 */
+		if (info->kernel_version >= KERNEL_VERSION(3, 10, 0)) {
+			info->l1_index_size = PTE_INDEX_SIZE_L4_64K_3_10;
+			info->l2_index_size = PMD_INDEX_SIZE_L4_64K_3_10;
+			info->l3_index_size = PUD_INDEX_SIZE_L4_64K;
+		} else {
+			info->l1_index_size = PTE_INDEX_SIZE_L4_64K;
+			info->l2_index_size = PMD_INDEX_SIZE_L4_64K;
+			info->l3_index_size = PUD_INDEX_SIZE_L4_64K;
+		}
+
+		info->pte_shift = SYMBOL(demote_segment_4k) ?
+			PTE_SHIFT_L4_64K_V2 : PTE_SHIFT_L4_64K_V1;
+		info->l2_masked_bits = PMD_MASKED_BITS_64K;
+	} else {
+		/*
+		 * 4K pagesize
+		 */
+		info->l1_index_size = PTE_INDEX_SIZE_L4_4K;
+		info->l2_index_size = PMD_INDEX_SIZE_L4_4K;
+		info->l3_index_size = PUD_INDEX_SIZE_L4_4K;
+
+		info->pte_shift = PTE_SHIFT_L4_4K;
+		info->l2_masked_bits = PMD_MASKED_BITS_4K;
+	}
+
+	/*
+	 * Compute ptrs per each level
+	 */
+	info->l1_shift = info->page_shift;
+	info->ptrs_per_l1 = (1 << info->l1_index_size);
+	info->ptrs_per_l2 = (1 << info->l2_index_size);
+	info->ptrs_per_l3 = (1 << info->l3_index_size);
+
+	info->ptrs_per_pgd = info->ptrs_per_l3;
+
+	/*
+	 * Compute shifts
+	 */
+	info->l2_shift = info->l1_shift + info->l1_index_size;
+	info->l3_shift = info->l2_shift + info->l2_index_size;
+	info->l4_shift = info->l3_shift + info->l3_index_size;
+
+	return TRUE;
+}
+
 /*
  *  If the vmemmap address translation information is stored in the kernel,
  *  make the translation.
@@ -168,6 +220,83 @@ ppc64_vmemmap_to_phys(unsigned long vaddr)
 			break;
 		}
 	}
+
+	return paddr;
+}
+
+static unsigned long long
+ppc64_vtop_level4(unsigned long vaddr)
+{
+	ulong *level4, *level4_dir;
+	ulong *page_dir, *page_middle;
+	ulong *page_table;
+	unsigned long long level4_pte, pgd_pte;
+	unsigned long long pmd_pte, pte;
+	unsigned long long paddr = NOT_PADDR;
+
+	if (info->page_buf == NULL) {
+		/*
+		 * This is the first vmalloc address translation request
+		 */
+		info->page_buf = (char *)calloc(1, PAGESIZE());
+		if (info->page_buf == NULL) {
+			ERRMSG("Can't allocate memory to read page tables. %s\n",
+			       strerror(errno));
+			return NOT_PADDR;
+		}
+	}
+
+	level4 = (ulong *)info->kernel_pgd;
+	level4_dir = (ulong *)((ulong *)level4 + L4_OFFSET(vaddr));
+	if (!readmem(VADDR, PAGEBASE(level4), info->page_buf, PAGESIZE())) {
+		ERRMSG("Can't read level4 page: 0x%llx\n", PAGEBASE(level4));
+		return NOT_PADDR;
+	}
+	level4_pte = ULONG((info->page_buf + PAGEOFFSET(level4_dir)));
+	if (!level4_pte)
+		return NOT_PADDR;
+
+	/*
+	 * Sometimes we don't have level3 pagetable entries
+	 */
+	if (info->l3_index_size != 0) {
+		page_dir = (ulong *)((ulong *)level4_pte + PGD_OFFSET_L4(vaddr));
+		if (!readmem(VADDR, PAGEBASE(level4_pte), info->page_buf, PAGESIZE())) {
+			ERRMSG("Can't read PGD page: 0x%llx\n", PAGEBASE(level4_pte));
+			return NOT_PADDR;
+		}
+		pgd_pte = ULONG((info->page_buf + PAGEOFFSET(page_dir)));
+		if (!pgd_pte)
+			return NOT_PADDR;
+	} else {
+		pgd_pte = level4_pte;
+	}
+
+	page_middle = (ulong *)((ulong *)pgd_pte + PMD_OFFSET_L4(vaddr));
+	if (!readmem(VADDR, PAGEBASE(pgd_pte), info->page_buf, PAGESIZE())) {
+		ERRMSG("Can't read PMD page: 0x%llx\n", PAGEBASE(pgd_pte));
+		return NOT_PADDR;
+	}
+	pmd_pte = ULONG((info->page_buf + PAGEOFFSET(page_middle)));
+	if (!(pmd_pte))
+		return NOT_PADDR;
+
+	page_table = (ulong *)(pmd_pte & ~(info->l2_masked_bits))
+			+ (BTOP(vaddr) & (info->ptrs_per_l1 - 1));
+	if (!readmem(VADDR, PAGEBASE(pmd_pte), info->page_buf, PAGESIZE())) {
+		ERRMSG("Can't read page table: 0x%llx\n", PAGEBASE(pmd_pte));
+		return NOT_PADDR;
+	}
+	pte = ULONG((info->page_buf + PAGEOFFSET(page_table)));
+	if (!(pte & _PAGE_PRESENT)) {
+		ERRMSG("Page not present!\n");
+		return NOT_PADDR;
+	}
+
+	if (!pte)
+		return NOT_PADDR;
+
+	paddr = PAGEBASE(PTOB(pte >> info->pte_shift)) + PAGEOFFSET(vaddr);
 
 	return paddr;
 }
@@ -251,6 +380,15 @@ get_machdep_info_ppc64(void)
 	info->vmalloc_start = vmalloc_start;
 	DEBUG_MSG("vmalloc_start: %lx\n", vmalloc_start);
 
+	if (SYMBOL(swapper_pg_dir) != NOT_FOUND_SYMBOL) {
+		info->kernel_pgd = SYMBOL(swapper_pg_dir);
+	} else if (SYMBOL(cpu_pgd) != NOT_FOUND_SYMBOL) {
+		info->kernel_pgd = SYMBOL(cpu_pgd);
+	} else {
+		ERRMSG("No swapper_pg_dir or cpu_pgd symbols exist\n");
+		return FALSE;
+	}
+
 	if (SYMBOL(vmemmap_list) != NOT_FOUND_SYMBOL) {
 		info->vmemmap_start = VMEMMAP_REGION_ID << REGION_SHIFT;
 		info->vmemmap_end = info->vmemmap_start;
@@ -259,6 +397,17 @@ get_machdep_info_ppc64(void)
 			return FALSE;
 		}
 		DEBUG_MSG("vmemmap_start: %lx\n", info->vmemmap_start);
+	}
+
+	return TRUE;
+}
+
+int
+get_versiondep_info_ppc64()
+{
+	if (ppc64_vmalloc_init() == FALSE) {
+		ERRMSG("Can't initialize for vmalloc translation\n");
+		return FALSE;
 	}
 
 	return TRUE;
@@ -275,9 +424,17 @@ vaddr_to_paddr_ppc64(unsigned long vaddr)
 {
 	unsigned long long paddr;
 
+	if ((info->flag_vmemmap)
+	    && (vaddr >= info->vmemmap_start)) {
+		return ppc64_vmemmap_to_phys(vaddr);
+	}
+
 	paddr = vaddr_to_paddr_general(vaddr);
 	if (paddr != NOT_PADDR)
 		return paddr;
+
+	if (!is_vmalloc_addr_ppc64(vaddr))
+		return (vaddr - info->kernel_start);
 
 	if ((SYMBOL(vmap_area_list) == NOT_FOUND_SYMBOL)
 	    || (OFFSET(vmap_area.va_start) == NOT_FOUND_STRUCTURE)
@@ -288,19 +445,8 @@ vaddr_to_paddr_ppc64(unsigned long vaddr)
 			return NOT_PADDR;
 		}
 	}
-	if (!is_vmalloc_addr_ppc64(vaddr))
-		return (vaddr - info->kernel_start);
 
-	if ((info->flag_vmemmap)
-	    && (vaddr >= info->vmemmap_start)) {
-		return ppc64_vmemmap_to_phys(vaddr);
-	}
-
-	/*
-	 * TODO: Support vmalloc translation.
-	 */
-	ERRMSG("This makedumpfile does not support vmalloc translation.\n");
-	return NOT_PADDR;
+	return ppc64_vtop_level4(vaddr);
 }
 
 #endif /* powerpc64 */

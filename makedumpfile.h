@@ -41,7 +41,9 @@
 #include "common.h"
 #include "dwarf_info.h"
 #include "diskdump_mod.h"
+#include "print_info.h"
 #include "sadump_mod.h"
+#include <pthread.h>
 
 /*
  * Result of command
@@ -74,6 +76,7 @@ int get_mem_type(void);
 #define PG_lru_ORIGINAL	 	(5)
 #define PG_slab_ORIGINAL	(7)
 #define PG_private_ORIGINAL	(11)	/* Has something at ->private */
+#define PG_compound_ORIGINAL	(14)	/* Is part of a compound page */
 #define PG_swapcache_ORIGINAL	(15)	/* Swap page: swp_entry_t in private */
 
 #define PAGE_BUDDY_MAPCOUNT_VALUE_v2_6_38	(-2)
@@ -148,6 +151,9 @@ test_bit(int nr, unsigned long addr)
 
 #define isLRU(flags)		test_bit(NUMBER(PG_lru), flags)
 #define isPrivate(flags)	test_bit(NUMBER(PG_private), flags)
+#define isCompoundHead(flags)   (!!((flags) & NUMBER(PG_head_mask)))
+#define isHugetlb(dtor)         ((SYMBOL(free_huge_page) != NOT_FOUND_SYMBOL) \
+				 && (SYMBOL(free_huge_page) == dtor))
 #define isSwapCache(flags)	test_bit(NUMBER(PG_swapcache), flags)
 #define isHWPOISON(flags)	(test_bit(NUMBER(PG_hwpoison), flags) \
 				&& (NUMBER(PG_hwpoison) != NOT_FOUND_NUMBER))
@@ -157,6 +163,9 @@ isAnon(unsigned long mapping)
 {
 	return ((unsigned long)mapping & PAGE_MAPPING_ANON) != 0;
 }
+
+#define PTOB(X)			(((unsigned long long)(X)) << PAGESHIFT())
+#define BTOP(X)			(((unsigned long long)(X)) >> PAGESHIFT())
 
 #define PAGESIZE()		(info->page_size)
 #define PAGESHIFT()		(info->page_shift)
@@ -421,6 +430,19 @@ do { \
 #define SPLITTING_SIZE_EI(i)	info->splitting_info[i].size_eraseinfo
 
 /*
+ * Macro for getting parallel info.
+ */
+#define FD_MEMORY_PARALLEL(i)		info->parallel_info[i].fd_memory
+#define FD_BITMAP_MEMORY_PARALLEL(i)	info->parallel_info[i].fd_bitmap_memory
+#define FD_BITMAP_PARALLEL(i)		info->parallel_info[i].fd_bitmap
+#define BUF_PARALLEL(i)			info->parallel_info[i].buf
+#define BUF_OUT_PARALLEL(i)		info->parallel_info[i].buf_out
+#define MMAP_CACHE_PARALLEL(i)		info->parallel_info[i].mmap_cache
+#define ZLIB_STREAM_PARALLEL(i)		info->parallel_info[i].zlib_stream
+#ifdef USELZO
+#define WRKMEM_PARALLEL(i)		info->parallel_info[i].wrkmem
+#endif
+/*
  * kernel version
  *
  * NOTE: the format of kernel_version is as follows
@@ -434,7 +456,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(3, 11, 3)/* linux-3.11.3 */
+#define LATEST_VERSION		KERNEL_VERSION(4, 1, 0)/* linux-4.1.0 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -475,6 +497,33 @@ do { \
 #define VMALLOC_END		(info->vmalloc_end)
 #define VMEMMAP_START		(info->vmemmap_start)
 #define VMEMMAP_END		(info->vmemmap_end)
+
+#ifdef __aarch64__
+#define CONFIG_ARM64_PGTABLE_LEVELS	2
+#define CONFIG_ARM64_VA_BITS		42
+#define CONFIG_ARM64_64K_PAGES		1
+
+/* Currently we only suport following defines based on above
+ * config definitions.
+ * TODOs: We need to find a way to get above defines dynamically and
+ * then to support following definitions based on that
+ */
+
+#if CONFIG_ARM64_PGTABLE_LEVELS == 2
+#define ARM64_PGTABLE_LEVELS	2
+#endif
+
+#if CONFIG_ARM64_VA_BITS == 42
+#define VA_BITS			42
+#endif
+
+#ifdef CONFIG_ARM64_64K_PAGES
+#define PAGE_SHIFT		16
+#endif
+
+#define KVBASE_MASK		(0xffffffffffffffffUL << (VA_BITS - 1))
+#define KVBASE			(SYMBOL(_stext) & KVBASE_MASK)
+#endif /* aarch64 */
 
 #ifdef __arm__
 #define KVBASE_MASK		(0xffff)
@@ -542,7 +591,9 @@ do { \
 #define VMEMMAP_END_2_6_31	(0xffffeaffffffffff) /* 2.6.31, or later  */
 
 #define __START_KERNEL_map	(0xffffffff80000000)
-#define MODULES_VADDR		(0xffffffff88000000)
+#define KERNEL_IMAGE_SIZE_ORIG		(0x0000000008000000) /* 2.6.25, or former */
+#define KERNEL_IMAGE_SIZE_2_6_26	(0x0000000020000000) /* 2.6.26, or later  */
+#define MODULES_VADDR          (__START_KERNEL_map + NUMBER(KERNEL_IMAGE_SIZE))
 #define MODULES_END		(0xfffffffffff00000)
 #define KVBASE			PAGE_OFFSET
 #define _SECTION_SIZE_BITS	(27)
@@ -586,6 +637,58 @@ do { \
 #define _MAX_PHYSMEM_BITS_3_7   (46)
 #define REGION_SHIFT            (60UL)
 #define VMEMMAP_REGION_ID       (0xfUL)
+
+#define PGDIR_SHIFT	\
+	(PAGESHIFT() + (PAGESHIFT() - 3) + (PAGESHIFT() - 2))
+#define PMD_SHIFT       (PAGESHIFT() + (PAGESHIFT() - 3))
+
+/* shift to put page number into pte */
+#define PTE_SHIFT 16
+
+#define PTE_INDEX_SIZE  9
+#define PMD_INDEX_SIZE  10
+#define PGD_INDEX_SIZE  10
+
+#define PTRS_PER_PTE    (1 << PTE_INDEX_SIZE)
+#define PTRS_PER_PMD    (1 << PMD_INDEX_SIZE)
+#define PTRS_PER_PGD    (1 << PGD_INDEX_SIZE)
+
+#define PGD_OFFSET(vaddr)       ((vaddr >> PGDIR_SHIFT) & 0x7ff)
+#define PMD_OFFSET(vaddr)       ((vaddr >> PMD_SHIFT) & (PTRS_PER_PMD - 1))
+
+/* 4-level page table support */
+
+/* 4K pagesize */
+#define PTE_INDEX_SIZE_L4_4K  9
+#define PMD_INDEX_SIZE_L4_4K  7
+#define PUD_INDEX_SIZE_L4_4K  7
+#define PGD_INDEX_SIZE_L4_4K  9
+#define PTE_SHIFT_L4_4K  17
+#define PMD_MASKED_BITS_4K  0
+
+/* 64K pagesize */
+#define PTE_INDEX_SIZE_L4_64K   12
+#define PMD_INDEX_SIZE_L4_64K   12
+#define PUD_INDEX_SIZE_L4_64K   0
+#define PGD_INDEX_SIZE_L4_64K   4
+#define PTE_INDEX_SIZE_L4_64K_3_10  8
+#define PMD_INDEX_SIZE_L4_64K_3_10  10
+#define PGD_INDEX_SIZE_L4_64K_3_10  12
+#define PTE_SHIFT_L4_64K_V1  32
+#define PTE_SHIFT_L4_64K_V2  30
+#define PMD_MASKED_BITS_64K  0x1ff
+
+#define L4_MASK		\
+	(info->kernel_version >= KERNEL_VERSION(3, 10, 0) ? 0xfff : 0x1ff)
+#define L4_OFFSET(vaddr)	((vaddr >> (info->l4_shift)) & L4_MASK)
+
+#define PGD_OFFSET_L4(vaddr)	\
+	((vaddr >> (info->l3_shift)) & (info->ptrs_per_l3 - 1))
+
+#define PMD_OFFSET_L4(vaddr)	\
+	((vaddr >> (info->l2_shift)) & (info->ptrs_per_l2 - 1))
+
+#define _PAGE_PRESENT		0x1UL
 #endif
 
 #ifdef __powerpc32__
@@ -698,27 +801,48 @@ do { \
 /*
  * The function of dependence on machine
  */
+static inline int stub_true() { return TRUE; }
+static inline int stub_true_ul(unsigned long x) { return TRUE; }
+#ifdef __aarch64__
+int get_phys_base_arm64(void);
+int get_machdep_info_arm64(void);
+unsigned long long vaddr_to_paddr_arm64(unsigned long vaddr);
+int get_versiondep_info_arm64(void);
+int get_xen_basic_info_arm64(void);
+int get_xen_info_arm64(void);
+#define vaddr_to_paddr(X)	vaddr_to_paddr_arm64(X)
+#define get_phys_base()		get_phys_base_arm64()
+#define get_machdep_info()	get_machdep_info_arm64()
+#define get_versiondep_info()	get_versiondep_info_arm64()
+#define get_xen_basic_info_arch(X) get_xen_basic_info_arm64(X)
+#define get_xen_info_arch(X) get_xen_info_arm64(X)
+#define is_phys_addr(X)		stub_true_ul(X)
+#endif /* aarch64 */
+
 #ifdef __arm__
 int get_phys_base_arm(void);
 int get_machdep_info_arm(void);
 unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
 #define get_phys_base()		get_phys_base_arm()
 #define get_machdep_info()	get_machdep_info_arm()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_arm(X)
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif /* arm */
 
 #ifdef __x86__
 int get_machdep_info_x86(void);
 int get_versiondep_info_x86(void);
 unsigned long long vaddr_to_paddr_x86(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_x86()
 #define get_versiondep_info()	get_versiondep_info_x86()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86(X)
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif /* x86 */
 
 #ifdef __x86_64__
+int is_vmalloc_addr_x86_64(ulong vaddr);
 int get_phys_base_x86_64(void);
 int get_machdep_info_x86_64(void);
 int get_versiondep_info_x86_64(void);
@@ -727,33 +851,39 @@ unsigned long long vaddr_to_paddr_x86_64(unsigned long vaddr);
 #define get_machdep_info()	get_machdep_info_x86_64()
 #define get_versiondep_info()	get_versiondep_info_x86_64()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86_64(X)
+#define is_phys_addr(X)		(!is_vmalloc_addr_x86_64(X))
 #endif /* x86_64 */
 
 #ifdef __powerpc64__ /* powerpc64 */
 int get_machdep_info_ppc64(void);
+int get_versiondep_info_ppc64(void);
 unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc64()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	get_versiondep_info_ppc64()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc64 */
 
 #ifdef __powerpc32__ /* powerpc32 */
 int get_machdep_info_ppc(void);
 unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
-#define get_phys_base()		TRUE
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc(X)
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc32 */
 
 #ifdef __s390x__ /* s390x */
 int get_machdep_info_s390x(void);
 unsigned long long vaddr_to_paddr_s390x(unsigned long vaddr);
-#define get_phys_base()		TRUE
+int is_iomem_phys_addr_s390x(unsigned long addr);
+#define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_s390x()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_s390x(X)
+#define is_phys_addr(X)		is_iomem_phys_addr_s390x(X)
 #endif          /* s390x */
 
 #ifdef __ia64__ /* ia64 */
@@ -762,10 +892,13 @@ int get_machdep_info_ia64(void);
 unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define get_machdep_info()	get_machdep_info_ia64()
 #define get_phys_base()		get_phys_base_ia64()
-#define get_versiondep_info()	TRUE
+#define get_versiondep_info()	stub_true()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ia64(X)
 #define VADDR_REGION(X)		(((unsigned long)(X)) >> REGION_SHIFT)
+#define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* ia64 */
+
+typedef unsigned long long mdf_pfn_t;
 
 #ifndef ARCH_PFN_OFFSET
 #define ARCH_PFN_OFFSET		0
@@ -773,7 +906,7 @@ unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define paddr_to_pfn(X) \
 	(((unsigned long long)(X) >> PAGESHIFT()) - ARCH_PFN_OFFSET)
 #define pfn_to_paddr(X) \
-	(((unsigned long long)(X) + ARCH_PFN_OFFSET) << PAGESHIFT())
+	(((mdf_pfn_t)(X) + ARCH_PFN_OFFSET) << PAGESHIFT())
 
 /* Format of Xen crash info ELF note */
 typedef struct {
@@ -813,8 +946,8 @@ typedef struct {
 } xen_crash_info_v2_t;
 
 struct mem_map_data {
-	unsigned long long	pfn_start;
-	unsigned long long	pfn_end;
+	mdf_pfn_t	pfn_start;
+	mdf_pfn_t	pfn_end;
 	unsigned long	mem_map;
 };
 
@@ -822,7 +955,7 @@ struct dump_bitmap {
 	int		fd;
 	int		no_block;
 	char		*file_name;
-	char		buf[BUFSIZE_BITMAP];
+	char		*buf;
 	off_t		offset;
 };
 
@@ -836,6 +969,45 @@ struct cache_data {
 };
 typedef unsigned long int ulong;
 typedef unsigned long long int ulonglong;
+
+/*
+ * for parallel process
+ */
+
+#define PAGE_DATA_NUM	(50)
+#define WAIT_TIME	(60 * 10)
+#define PTHREAD_FAIL	((void *)-2)
+#define NUM_BUFFERS	(50)
+
+struct mmap_cache {
+	char	*mmap_buf;
+	off_t	mmap_start_offset;
+	off_t   mmap_end_offset;
+};
+
+struct page_data
+{
+	mdf_pfn_t pfn;
+	int dumpable;
+	int zero;
+	unsigned int flags;
+	long size;
+	unsigned char *buf;
+	pthread_mutex_t mutex;
+	/*
+	 * whether the page_data is ready to be consumed
+	 */
+	int ready;
+};
+
+struct thread_args {
+	int thread_num;
+	unsigned long len_buf_out;
+	mdf_pfn_t start_pfn, end_pfn;
+	int page_data_num;
+	struct cycle *cycle;
+	struct page_data *page_data_buf;
+};
 
 /*
  * makedumpfile header
@@ -866,11 +1038,24 @@ struct makedumpfile_data_header {
 struct splitting_info {
 	char			*name_dumpfile;
 	int 			fd_bitmap;
-	unsigned long long	start_pfn;
-	unsigned long long	end_pfn;
+	mdf_pfn_t		start_pfn;
+	mdf_pfn_t		end_pfn;
 	off_t			offset_eraseinfo;
 	unsigned long		size_eraseinfo;
 } splitting_info_t;
+
+struct parallel_info {
+	int			fd_memory;
+	int 			fd_bitmap_memory;
+	int			fd_bitmap;
+	unsigned char		*buf;
+	unsigned char 		*buf_out;
+	struct mmap_cache	*mmap_cache;
+	z_stream		zlib_stream;
+#ifdef USELZO
+	lzo_bytep		wrkmem;
+#endif
+} parallel_info_t;
 
 struct ppc64_vmemmap {
 	unsigned long		phys;
@@ -901,20 +1086,21 @@ struct DumpInfo {
 	int		flag_rearrange;      /* flag of creating dumpfile from
 						flattened format */
 	int		flag_split;	     /* splitting vmcore */
-  	int		flag_cyclic;	     /* cyclic processing to keep memory consumption */
+	int		flag_cyclic;	     /* multi-cycle processing is necessary */
 	int		flag_usemmap;	     /* /proc/vmcore supports mmap(2) */
 	int		flag_reassemble;     /* reassemble multiple dumpfiles into one */
 	int		flag_refiltering;    /* refilter from kdump-compressed file */
 	int		flag_force;	     /* overwrite existing stuff */
 	int		flag_exclude_xen_dom;/* exclude Domain-U from xen-kdump */
 	int             flag_dmesg;          /* dump the dmesg log out of the vmcore file */
+	int             flag_mem_usage;  /*show the page number of memory in different use*/
 	int		flag_use_printk_log; /* did we read printk_log symbol name? */
 	int		flag_nospace;	     /* the flag of "No space on device" error */
 	int		flag_vmemmap;        /* kernel supports vmemmap address space */
 	unsigned long	vaddr_for_vtop;      /* virtual address for debugging */
 	long		page_size;           /* size of page */
 	long		page_shift;
-	unsigned long long	max_mapnr;   /* number of page descriptor */
+	mdf_pfn_t	max_mapnr;   /* number of page descriptor */
 	unsigned long   page_offset;
 	unsigned long   section_size_bits;
 	unsigned long   max_physmem_bits;
@@ -928,6 +1114,25 @@ struct DumpInfo {
 	int		vmemmap_psize;
 	int		vmemmap_cnt;
 	struct ppc64_vmemmap	*vmemmap_list;
+
+	/*
+	 * page table info for ppc64
+	 */
+	int		ptrs_per_pgd;
+	uint		l3_index_size;
+	uint		l2_index_size;
+	uint		l1_index_size;
+	uint		ptrs_per_l3;
+	uint		ptrs_per_l2;
+	uint		ptrs_per_l1;
+	uint		l4_shift;
+	uint		l3_shift;
+	uint		l2_shift;
+	uint		l1_shift;
+	uint		pte_shift;
+	uint		l2_masked_bits;
+	ulong		kernel_pgd;
+	char		*page_buf; /* Page buffer to read page tables */
 
 	/*
 	 * Filter config file containing filter commands to filter out kernel
@@ -988,6 +1193,7 @@ struct DumpInfo {
 	char			*name_dumpfile;
 	int			num_dumpfile;
 	struct splitting_info	*splitting_info;
+	struct parallel_info	*parallel_info;
 
 	/*
 	 * bitmap info:
@@ -1025,10 +1231,10 @@ struct DumpInfo {
 					 *   1 .. xen_crash_info_t
 					 *   2 .. xen_crash_info_v2_t */
 
-	unsigned long long	dom0_mapnr;  /* The number of page in domain-0.
-					      * Different from max_mapnr.
-					      * max_mapnr is the number of page
-					      * in system. */
+	mdf_pfn_t	dom0_mapnr;	/* The number of page in domain-0.
+					 * Different from max_mapnr.
+					 * max_mapnr is the number of page
+					 * in system. */
 	unsigned long xen_phys_start;
 	unsigned long xen_heap_start;	/* start mfn of xen heap area */
 	unsigned long xen_heap_end;	/* end mfn(+1) of xen heap area */
@@ -1048,17 +1254,14 @@ struct DumpInfo {
 	/*
 	 * for splitting
 	 */
-	unsigned long long split_start_pfn;  
-	unsigned long long split_end_pfn;  
+	mdf_pfn_t split_start_pfn;
+	mdf_pfn_t split_end_pfn;
 
 	/*
 	 * for cyclic processing
 	 */
-	char               *partial_bitmap1;
-	char               *partial_bitmap2;
-	unsigned long long cyclic_start_pfn;
-	unsigned long long cyclic_end_pfn;  
-	unsigned long long num_dumpable;
+	char	           *working_dir;	     /* working directory for bitmap */
+	mdf_pfn_t          num_dumpable;
 	unsigned long      bufsize_cyclic;
 	unsigned long      pfn_cyclic;
 
@@ -1080,8 +1283,38 @@ struct DumpInfo {
 	 */
 	int (*page_is_buddy)(unsigned long flags, unsigned int _mapcount,
 			     unsigned long private, unsigned int _count);
+	/*
+	 * for cyclic_splitting mode, setup splitblock_size
+	 */
+	long long splitblock_size;
+	/*
+	 * for parallel process
+	 */
+	int num_threads;
+	int num_buffers;
+	pthread_t **threads;
+	struct thread_args *kdump_thread_args;
+	struct page_data *page_data_buf;
+	pthread_rwlock_t usemmap_rwlock;
+	mdf_pfn_t current_pfn;
+	pthread_mutex_t current_pfn_mutex;
+	mdf_pfn_t consumed_pfn;
+	pthread_mutex_t consumed_pfn_mutex;
+	pthread_mutex_t filter_mutex;
 };
 extern struct DumpInfo		*info;
+
+/*
+ * for cyclic_splitting mode,Manage memory by splitblock
+ */
+#define DEFAULT_SPLITBLOCK_SIZE (1LL << 30)
+
+struct SplitBlock {
+	char *table;
+	long long num;
+	long long page_per_splitblock;
+	int entry_size;                 /* counted by byte */
+};
 
 /*
  * kernel VM-related data
@@ -1143,6 +1376,7 @@ struct symbol_table {
 	unsigned long long	node_remap_start_vaddr;
 	unsigned long long	node_remap_end_vaddr;
 	unsigned long long	node_remap_start_pfn;
+	unsigned long long      free_huge_page;
 
 	/*
 	 * for Xen extraction
@@ -1192,6 +1426,12 @@ struct symbol_table {
 	unsigned long long		vmemmap_list;
 	unsigned long long		mmu_vmemmap_psize;
 	unsigned long long		mmu_psize_defs;
+
+	/*
+	 * vm related symbols for ppc64 arch
+	 */
+	unsigned long long		cpu_pgd;
+	unsigned long long		demote_segment_4k;
 };
 
 struct size_table {
@@ -1428,12 +1668,17 @@ struct number_table {
 	 */
 	long	PG_lru;
 	long	PG_private;
+	long	PG_head;
+	long	PG_head_mask;
 	long	PG_swapcache;
 	long	PG_buddy;
 	long	PG_slab;
 	long    PG_hwpoison;
 
 	long	PAGE_BUDDY_MAPCOUNT_VALUE;
+	long	KERNEL_IMAGE_SIZE;
+	long	SECTION_SIZE_BITS;
+	long	MAX_PHYSMEM_BITS;
 };
 
 struct srcfile_table {
@@ -1450,17 +1695,29 @@ extern struct array_table	array_table;
 extern struct number_table	number_table;
 extern struct srcfile_table	srcfile_table;
 
+struct memory_range {
+	unsigned long long start, end;
+};
+
+#define CRASH_RESERVED_MEM_NR   8
+struct memory_range crash_reserved_mem[CRASH_RESERVED_MEM_NR];
+int crash_reserved_mem_nr;
 
 int readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size);
 int get_str_osrelease_from_vmlinux(void);
 int read_vmcoreinfo_xen(void);
 int exclude_xen_user_domain(void);
-unsigned long long get_num_dumpable(void);
+mdf_pfn_t get_num_dumpable(void);
 int __read_disk_dump_header(struct disk_dump_header *dh, char *filename);
 int read_disk_dump_header(struct disk_dump_header *dh, char *filename);
 int read_kdump_sub_header(struct kdump_sub_header *kh, char *filename);
 void close_vmcoreinfo(void);
 int close_files_for_creating_dumpfile(void);
+int iomem_for_each_line(char *match, int (*callback)(void *data, int nr,
+						     char *str,
+						     unsigned long base,
+						     unsigned long length),
+			void *data);
 
 
 /*
@@ -1474,6 +1731,11 @@ struct domain_list {
 
 #define PAGES_PER_MAPWORD 	(sizeof(unsigned long) * 8)
 #define MFNS_PER_FRAME		(info->page_size / sizeof(unsigned long))
+
+#ifdef __aarch64__
+unsigned long long kvtop_xen_arm64(unsigned long kvaddr);
+#define kvtop_xen(X)	kvtop_xen_arm64(X)
+#endif /* aarch64 */
 
 #ifdef __arm__
 #define kvtop_xen(X)	FALSE
@@ -1590,19 +1852,43 @@ int get_xen_info_ia64(void);
 #define get_xen_info_arch(X) FALSE
 #endif	/* s390x */
 
+struct cycle {
+	mdf_pfn_t start_pfn;
+	mdf_pfn_t end_pfn;
+
+	/* for excluding multi-page regions */
+	mdf_pfn_t exclude_pfn_start;
+	mdf_pfn_t exclude_pfn_end;
+	mdf_pfn_t *exclude_pfn_counter;
+};
+
 static inline int
-is_on(char *bitmap, int i)
+is_on(char *bitmap, mdf_pfn_t i)
 {
 	return bitmap[i>>3] & (1 << (i & 7));
 }
 
 static inline int
-is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
+is_dumpable_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
+{
+	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
+		return FALSE;
+	else
+		return is_on(bitmap->buf, pfn - cycle->start_pfn);
+}
+
+static inline int
+is_dumpable_file(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 {
 	off_t offset;
 	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
 		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
-		lseek(bitmap->fd, offset, SEEK_SET);
+		if (lseek(bitmap->fd, offset, SEEK_SET) < 0 ) {
+			ERRMSG("Can't seek the bitmap(%s). %s\n",
+				bitmap->file_name, strerror(errno));
+			return FALSE;
+		}
+
 		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
 		if (pfn == 0)
 			bitmap->no_block = 0;
@@ -1613,18 +1899,19 @@ is_dumpable(struct dump_bitmap *bitmap, unsigned long long pfn)
 }
 
 static inline int
-is_dumpable_cyclic(char *bitmap, unsigned long long pfn)
+is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
 {
-	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
-		return FALSE;
-	else
-		return is_on(bitmap, pfn - info->cyclic_start_pfn);
+	if (bitmap->fd == 0) {
+		return is_dumpable_buffer(bitmap, pfn, cycle);
+	} else {
+		return is_dumpable_file(bitmap, pfn);
+	}
 }
 
 static inline int
-is_cyclic_region(unsigned long long pfn)
+is_cyclic_region(mdf_pfn_t pfn, struct cycle *cycle)
 {
-	if (pfn < info->cyclic_start_pfn || info->cyclic_end_pfn <= pfn)
+	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
 		return FALSE;
 	else
 		return TRUE;
@@ -1634,16 +1921,18 @@ static inline int
 is_zero_page(unsigned char *buf, long page_size)
 {
 	size_t i;
+	unsigned long long *vect = (unsigned long long *) buf;
+	long page_len = page_size / sizeof(unsigned long long);
 
-	for (i = 0; i < page_size; i++)
-		if (buf[i])
+	for (i = 0; i < page_len; i++)
+		if (vect[i])
 			return FALSE;
 	return TRUE;
 }
 
 void write_vmcoreinfo_data(void);
-int set_bit_on_1st_bitmap(unsigned long long pfn);
-int clear_bit_on_1st_bitmap(unsigned long long pfn);
+int set_bit_on_1st_bitmap(mdf_pfn_t pfn, struct cycle *cycle);
+int clear_bit_on_1st_bitmap(mdf_pfn_t pfn, struct cycle *cycle);
 
 #ifdef __x86__
 
@@ -1746,18 +2035,25 @@ struct elf_prstatus {
 #define OPT_DUMP_DMESG          OPT_START+7
 #define OPT_CONFIG              OPT_START+8
 #define OPT_DISKSET             OPT_START+9
-#define OPT_NON_CYCLIC          OPT_START+10
-#define OPT_CYCLIC_BUFFER       OPT_START+11
-#define OPT_EPPIC               OPT_START+12
-#define OPT_NON_MMAP            OPT_START+13
+#define OPT_CYCLIC_BUFFER       OPT_START+10
+#define OPT_EPPIC               OPT_START+11
+#define OPT_NON_MMAP            OPT_START+12
+#define OPT_MEM_USAGE           OPT_START+13
+#define OPT_SPLITBLOCK_SIZE	OPT_START+14
+#define OPT_WORKING_DIR         OPT_START+15
+#define OPT_NUM_THREADS	OPT_START+16
 
 /*
  * Function Prototype.
  */
-unsigned long long get_num_dumpable_cyclic(void);
+mdf_pfn_t get_num_dumpable_cyclic(void);
+mdf_pfn_t get_num_dumpable_cyclic_withsplit(void);
 int get_loads_dumpfile_cyclic(void);
 int initial_xen(void);
 unsigned long long get_free_memory_size(void);
 int calculate_cyclic_buffer_size(void);
+int prepare_splitblock_table(void);
+int initialize_zlib(z_stream *stream, int level);
+int finalize_zlib(z_stream *stream);
 
 #endif /* MAKEDUMPFILE_H */

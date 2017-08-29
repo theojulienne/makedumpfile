@@ -34,7 +34,7 @@ struct call_back eppic_cb = {
 	&get_die_offset,
 	&get_die_length,
 	&get_die_member_all,
-	&get_die_nfields,
+	&get_die_nfields_all,
 	&get_symbol_addr_all,
 	&update_filter_info_raw
 };
@@ -2028,6 +2028,84 @@ get_domain_all(char *symname, int cmd, unsigned long long *die) {
 }
 
 /*
+ * Search for die in modules as well as vmlinux
+ */
+int
+get_die_nfields_all(unsigned long long die_off)
+{
+	short vmlinux_searched = 0;
+	long nfields = -1;
+	unsigned int i, current_mod;
+	struct module_info *modules;
+
+	/* Search in vmlinux if debuginfo is set to vmlinux */
+	if (!strcmp(get_dwarf_module_name(), "vmlinux")) {
+		nfields = get_die_nfields(die_off);
+		if (nfields > 0)
+			return nfields;
+
+		vmlinux_searched = 1;
+	}
+
+	/*
+	 * Proceed the search in modules. Try in the module
+	 * which resulted in a hit in the previous search
+	 */
+
+	modules = mod_st.modules;
+	current_mod = mod_st.current_mod;
+
+	if (strcmp(get_dwarf_module_name(), modules[current_mod].name)) {
+		if (!set_dwarf_debuginfo(modules[current_mod].name,
+				info->system_utsname.release, NULL, -1)) {
+			ERRMSG("Cannot set to current module %s\n",
+					modules[current_mod].name);
+			return -1;
+		}
+	}
+
+	nfields = get_die_nfields(die_off);
+	if (nfields > 0)
+		return nfields;
+
+	/* Search in all modules */
+	for (i = 0; i < mod_st.num_modules; i++) {
+
+		/* Already searched. Skip */
+		if (i == current_mod)
+			continue;
+
+		if (!set_dwarf_debuginfo(modules[i].name,
+				info->system_utsname.release, NULL, -1)) {
+			ERRMSG("Skipping Module section %s\n", modules[i].name);
+			continue;
+		}
+
+		nfields = get_die_nfields(die_off);
+
+		if (nfields < 0)
+			continue;
+
+		/*
+		 * Die found. Set the current_mod to this module index,
+		 * a minor optimization for fast lookup next time
+		 */
+		mod_st.current_mod = i;
+		return nfields;
+	}
+
+	/* Die not found in any module. Set debuginfo back to vmlinux */
+	set_dwarf_debuginfo("vmlinux", NULL, info->name_vmlinux,
+			info->fd_vmlinux);
+
+	if (!vmlinux_searched)
+		return get_die_nfields(die_off);
+	else
+		return -1;
+
+}
+
+/*
  * Search for die member in modules as well as vmlinux
  */
 int
@@ -2250,7 +2328,6 @@ extract_filter_info(unsigned long long start_paddr,
 	return TRUE;
 }
 
-
 /*
  * External functions.
  */
@@ -2332,6 +2409,34 @@ filter_data_buffer(unsigned char *buf, unsigned long long paddr,
 			memset(buf_ptr, 0, fl_info.size);
 		else
 			memset(buf_ptr, fl_info.erase_ch, fl_info.size);
+	}
+}
+
+/*
+ * Filter buffer if the physical address is in filter_info.
+ */
+void
+filter_data_buffer_parallel(unsigned char *buf, unsigned long long paddr,
+					size_t size, pthread_mutex_t *mutex)
+{
+	struct filter_info fl_info;
+	unsigned char *buf_ptr;
+	int found = FALSE;
+
+	while (TRUE) {
+		pthread_mutex_lock(mutex);
+		found = extract_filter_info(paddr, paddr + size, &fl_info);
+		pthread_mutex_unlock(mutex);
+
+		if (found) {
+			buf_ptr = buf + (fl_info.paddr - paddr);
+			if (fl_info.nullify)
+				memset(buf_ptr, 0, fl_info.size);
+			else
+				memset(buf_ptr, fl_info.erase_ch, fl_info.size);
+		} else {
+			break;
+		}
 	}
 }
 
