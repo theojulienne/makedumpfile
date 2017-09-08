@@ -80,6 +80,8 @@ makedumpfile (1:1.6.2-0.1) UNRELEASED; urgency=medium
   * Add file to the list of kdump-tools dependencies, it's used by
     kdump-config.
 
+  * Add watch file.
+
  -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Fri, 08 Sep 2017 16:21:35 -0300
 
 makedumpfile (1:1.6.1-2) sid; urgency=medium
