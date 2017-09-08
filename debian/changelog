@@ -1,3 +1,82 @@
+makedumpfile (1:1.6.2-0.1) UNRELEASED; urgency=medium
+
+  * Non-maintainer upload.
+
+  * New upstream release. Main new feature:
+    o Support for sparc64
+     - sparc64 is supported from this version, it's tested on kernel-4.1.12.
+
+    o Add new option for --dump-dmesg
+     - Introduce the new option "--partial-dmesg", it can exclude the buffers
+       cleared by "dmesg --clear" while the current --dump-dmesg always extracts
+       the whole ring buffer.
+
+    o Support new kernels
+     - The supported kernel is updated to 4.11 in this version.
+
+  * Changelog:
+    o New feature
+        - [PATCH] Add initial sparc64 support (by Tom Hromatka) 001d9b7
+        - [PATCH v5 1/2] Add runtime kaslr offset if it exists (by Pratyush Anand)
+          2bfb7f1
+        - [PATCH v5 2/2] x86_64: Calculate page_offset in case of re-filtering/
+          sadump/virsh dump (by Pratyush Anand) 4944f93
+        - [PATCH v2] Add the --partial-dmesg option to dump only non-cleared dmesg
+          (by Ivan Delalande) ec5da81
+        - [PATCH v3 1/2] Fold the calc of time delta into a func (by Pingfan Liu)
+          1192446
+        - [PATCH v3 2/2] print_info: Show the remaining time of dump progress (by
+          Pingfan Liu) 3438e8d
+
+    o Bugfix
+        - [PATCH] elf_info.c: fix memory leak in get_kcore_dump_loads() (by Pingfan
+          Liu) f10d1e2
+        - [PATCH] Error on re-filtering the dump file with no free pages (by
+          Mikhail Zaslonko) deb8e1f
+        - [PATCH] Fix get_kcore_dump_loads() error case (by Pratyush Anand) a569d63
+        - [PATCH] sadump: set info->page_size before cache_init() (by Hatayama,
+          Daisuke) b98e6e0
+        - [PATCH] Fix the use of Xen physical and machine addresses (by Petr
+          Tesarik) e765785
+        - [PATCH V3] elf_info: Fix file_size if segment is excluded (by Pratyush
+          Anand) 88731c7
+        - [PATCH v3] Prevent data loss in last page of ELF core dumpfile (by Eric
+          DeVolder) 622f0d7
+        - [PATCH] Consider not page-size aligned phys_end for paddr_to_pfn() (by
+          Atsushi Kumagai) 25259e6
+        - [PATCH] Fix the regression caused by moving cache_init() earlier (by
+          Atsushi Kumagai) be0461f
+
+    o Cleanup
+        - [PATCH 1/4] eppic: Rename scripts to reflect validity of kernel version
+          (by Kamalesh Babulal) b55b29f
+        - [PATCH 2/4] eppic/vhost_net_buffers: Introduce changes for kernel 3.19
+          (by Kamalesh Babulal) 0a1d8ee
+        - [PATCH 3/4] eppic/dir_names: Introduce changes for kernel 3.14 (by
+          Kamalesh Babulal) 5c822a7
+        - [PATCH 4/4] eppic/keyring: Introduce changes for kernel 4.4 (by Kamalesh
+          Babulal) 19fe701
+        - [PATCH v3 1/7] show_mem_usage(): calculate page offset after elf load (by
+          Pratyush Anand) 4b0bed3
+        - [PATCH v3 2/7] initial(): call cache_init() a bit early (by Pratyush
+          Anand) 8e2834b
+        - [PATCH v3 3/7] x86_64: check physical address in PT_LOAD for none direct
+          mapped regions (by Pratyush Anand) f136302
+        - [PATCH v3 4/7] elf_info: kcore: check for invalid physical address (by
+          Pratyush Anand) f4ab689
+        - [PATCH v3 5/7] makedumpfile: Correct the calculation of kvaddr in
+          set_kcore_vmcoreinfo (by Baoquan He) 4c53423
+        - [PATCH v3 6/7] makedumpfile: Discard process_dump_load (by Baoquan He)
+          f3ff8c6
+        - [PATCH v3 7/7] mem-usage: allow to work only with -f for kernel version <
+          4.11 (by Pratyush Anand) 78cbb40
+        - [PATCH] Fix typo in the ERRMSG of function show_mem_usage (by Eric
+          Desrochers) ade8512 (Closes: #857051)
+        - [PATCH] Fix other typos in messages (by Atsushi Kumagai) b171374
+        - [PATCH] Fix compiler warnings (by Eric DeVolder) 04dab93
+
+ -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Fri, 08 Sep 2017 16:21:35 -0300
+
 makedumpfile (1:1.6.1-2) sid; urgency=medium
 
   * d/kernel-postinst-generate-initrd : Add scsi_dh_* modules if in
