@@ -38,6 +38,7 @@
 
 struct pt_load_segment {
 	off_t			file_offset;
+	off_t			file_size;
 	unsigned long long	phys_start;
 	unsigned long long	phys_end;
 	unsigned long long	virt_start;
@@ -162,10 +163,11 @@ dump_Elf_load(Elf64_Phdr *prog, int num_load)
 
 	pls = &pt_loads[num_load];
 	pls->phys_start  = prog->p_paddr;
-	pls->phys_end    = pls->phys_start + prog->p_filesz;
+	pls->phys_end    = pls->phys_start + prog->p_memsz;
 	pls->virt_start  = prog->p_vaddr;
-	pls->virt_end    = pls->virt_start + prog->p_filesz;
+	pls->virt_end    = pls->virt_start + prog->p_memsz;
 	pls->file_offset = prog->p_offset;
+	pls->file_size   = prog->p_filesz;
 
 	DEBUG_MSG("LOAD (%d)\n", num_load);
 	DEBUG_MSG("  phys_start : %llx\n", pls->phys_start);
@@ -370,7 +372,7 @@ int set_kcore_vmcoreinfo(uint64_t vmcoreinfo_addr, uint64_t vmcoreinfo_len)
 	off_t offset_desc;
 
 	offset = UNINITIALIZED;
-	kvaddr = (ulong)vmcoreinfo_addr | PAGE_OFFSET;
+	kvaddr = (ulong)vmcoreinfo_addr + PAGE_OFFSET;
 
 	for (i = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
@@ -462,7 +464,7 @@ paddr_to_offset(unsigned long long paddr)
 	for (i = offset = 0; i < num_pt_loads; i++) {
 		pls = &pt_loads[i];
 		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)) {
+		    && (paddr < pls->phys_start + pls->file_size)) {
 			offset = (off_t)(paddr - pls->phys_start) +
 				pls->file_offset;
 			break;
@@ -480,16 +482,14 @@ paddr_to_offset2(unsigned long long paddr, off_t hint)
 {
 	int i;
 	off_t offset;
-	unsigned long long len;
 	struct pt_load_segment *pls;
 
 	for (i = offset = 0; i < num_pt_loads; i++) {
 		pls = &pt_loads[i];
-		len = pls->phys_end - pls->phys_start;
 		if ((paddr >= pls->phys_start)
-		    && (paddr < pls->phys_end)
+		    && (paddr < pls->phys_start + pls->file_size)
 		    && (hint >= pls->file_offset)
-		    && (hint < pls->file_offset + len)) {
+		    && (hint < pls->file_offset + pls->file_size)) {
 			offset = (off_t)(paddr - pls->phys_start) +
 				pls->file_offset;
 			break;
@@ -691,6 +691,34 @@ get_max_paddr(void)
 	return max_paddr;
 }
 
+/*
+ * Find the LOAD segment which is closest to the requested
+ * physical address within a given distance.
+ *  If there is no such segment, return a negative number.
+ */
+int
+closest_pt_load(unsigned long long paddr, unsigned long distance)
+{
+	int i, bestidx;
+	struct pt_load_segment *pls;
+	unsigned long bestdist;
+
+	bestdist = distance;
+	bestidx = -1;
+	for (i = 0; i < num_pt_loads; ++i) {
+		pls = &pt_loads[i];
+		if (paddr >= pls->phys_end)
+			continue;
+		if (paddr >= pls->phys_start)
+			return i;	/* Exact match */
+		if (bestdist > pls->phys_start - paddr) {
+			bestdist = pls->phys_start - paddr;
+			bestidx = i;
+		}
+	}
+	return bestidx;
+}
+
 int
 get_elf64_ehdr(int fd, char *filename, Elf64_Ehdr *ehdr)
 {
@@ -798,9 +826,12 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 				temp_seg.virt_end = vend;
 				temp_seg.file_offset = (*pt_loads)[i].file_offset
 					+ temp_seg.virt_start - (*pt_loads)[i].virt_start;
+				temp_seg.file_size = temp_seg.phys_end
+					- temp_seg.phys_start;
 
 				(*pt_loads)[i].virt_end = kvstart - 1;
 				(*pt_loads)[i].phys_end =  start - 1;
+				(*pt_loads)[i].file_size -= temp_seg.file_size;
 
 				tidx = i+1;
 			} else if (kvstart != vstart) {
@@ -810,6 +841,7 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 				(*pt_loads)[i].phys_start = end + 1;
 				(*pt_loads)[i].virt_start = kvend + 1;
 			}
+			(*pt_loads)[i].file_size -= (end -start);
 		}
 	}
 	/* Insert split load segment, if any. */
@@ -829,22 +861,6 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 	return 0;
 }
 
-static int
-process_dump_load(struct pt_load_segment	*pls)
-{
-	unsigned long long paddr;
-
-	paddr = vaddr_to_paddr(pls->virt_start);
-	pls->phys_start  = paddr;
-	pls->phys_end    = paddr + (pls->virt_end - pls->virt_start);
-	DEBUG_MSG("process_dump_load\n");
-	DEBUG_MSG("  phys_start : %llx\n", pls->phys_start);
-	DEBUG_MSG("  phys_end   : %llx\n", pls->phys_end);
-	DEBUG_MSG("  virt_start : %llx\n", pls->virt_start);
-	DEBUG_MSG("  virt_end   : %llx\n", pls->virt_end);
-
-	return TRUE;
-}
 
 int get_kcore_dump_loads(void)
 {
@@ -853,7 +869,8 @@ int get_kcore_dump_loads(void)
 
 	for (i = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
-		if (!is_phys_addr(p->virt_start))
+		if (p->phys_start == NOT_PADDR
+				|| !is_phys_addr(p->virt_start))
 			continue;
 		loads++;
 	}
@@ -873,21 +890,24 @@ int get_kcore_dump_loads(void)
 
 	for (i = 0, j = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
-		if (!is_phys_addr(p->virt_start))
+		if (p->phys_start == NOT_PADDR
+				|| !is_phys_addr(p->virt_start))
 			continue;
-		if (j >= loads)
+		if (j >= loads) {
+			free(pls);
 			return FALSE;
+		}
 
 		if (j == 0) {
 			offset_pt_load_memory = p->file_offset;
 			if (offset_pt_load_memory == 0) {
 				ERRMSG("Can't get the offset of page data.\n");
+				free(pls);
 				return FALSE;
 			}
 		}
 
 		pls[j] = *p;
-		process_dump_load(&pls[j]);
 		j++;
 	}
 
@@ -1092,6 +1112,32 @@ get_pt_load(int idx,
 		*virt_start = pls->virt_start;
 	if (virt_end)
 		*virt_end   = pls->virt_end;
+
+	return TRUE;
+}
+
+int
+get_pt_load_extents(int idx,
+	unsigned long long *phys_start,
+	unsigned long long *phys_end,
+	off_t *file_offset,
+	off_t *file_size)
+{
+	struct pt_load_segment *pls;
+
+	if (num_pt_loads <= idx)
+		return FALSE;
+
+	pls = &pt_loads[idx];
+
+	if (phys_start)
+		*phys_start  = pls->phys_start;
+	if (phys_end)
+		*phys_end    = pls->phys_end;
+	if (file_offset)
+		*file_offset = pls->file_offset;
+	if (file_size)
+		*file_size   = pls->file_size;
 
 	return TRUE;
 }
