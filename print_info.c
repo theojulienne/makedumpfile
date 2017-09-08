@@ -15,8 +15,9 @@
  */
 #include "print_info.h"
 #include <time.h>
+#include <string.h>
 
-#define PROGRESS_MAXLEN		"35"
+#define PROGRESS_MAXLEN		"50"
 
 int message_level;
 int flag_strerr_message;
@@ -202,7 +203,7 @@ print_usage(void)
 	MSG("      And it will reduces time for saving DUMPFILE.\n");
 	MSG("      Note that if the usable cpu number is less than the thread number, it may\n");
 	MSG("      lead to great performance degradation.\n");
-	MSG("      This feature only supports creating DUMPFILE in kdump-comressed format from\n");
+	MSG("      This feature only supports creating DUMPFILE in kdump-compressed format from\n");
 	MSG("      VMCORE in kdump-compressed format or elf format.\n");
 	MSG("\n");
 	MSG("  [--reassemble]:\n");
@@ -286,7 +287,7 @@ print_usage(void)
 	MSG("\n");
 	MSG("  [--vtop VIRTUAL_ADDRESS]:\n");
 	MSG("      This option is useful, when user debugs the translation problem\n");
-	MSG("      of virtual address. If specifing the VIRTUAL_ADDRESS, its physical\n");
+	MSG("      of virtual address. If specifying the VIRTUAL_ADDRESS, its physical\n");
 	MSG("      address is printed.\n");
 	MSG("\n");
 	MSG("  [--dump-dmesg]:\n");
@@ -294,7 +295,7 @@ print_usage(void)
 	MSG("      compressing and filtering a VMCORE to make it smaller, it simply\n");
 	MSG("      extracts the dmesg log from a VMCORE and writes it to the specified\n");
 	MSG("      LOGFILE. If a VMCORE does not contain VMCOREINFO for dmesg, it is\n");
-	MSG("      necessary to specfiy [-x VMLINUX] or [-i VMCOREINFO].\n");
+	MSG("      necessary to specify [-x VMLINUX] or [-i VMCOREINFO].\n");
 	MSG("\n");
 	MSG("  [--mem-usage]:\n");
 	MSG("      This option is only for x86_64.\n");
@@ -310,6 +311,7 @@ print_usage(void)
 	MSG("\n");
 	MSG("  [-f]:\n");
 	MSG("      Overwrite DUMPFILE even if it already exists.\n");
+	MSG("      Force mem-usage to work with older kernel as well.\n");
 	MSG("\n");
 	MSG("  [-h, --help]:\n");
 	MSG("      Show help message and LZO/snappy support status (enabled/disabled).\n");
@@ -336,14 +338,49 @@ print_usage(void)
 	MSG("\n");
 }
 
+static void calc_delta(struct timeval *tv_start, struct timeval *delta)
+{
+	struct timeval tv_end;
+
+	gettimeofday(&tv_end, NULL);
+	delta->tv_sec = tv_end.tv_sec - tv_start->tv_sec;
+	delta->tv_usec = tv_end.tv_usec - tv_start->tv_usec;
+	if (delta->tv_usec < 0) {
+		delta->tv_sec--;
+		delta->tv_usec += 1000000;
+	}
+}
+
+/* produce less than 12 bytes on msg */
+static int eta_to_human_short (int secs, char* msg)
+{
+	strcpy(msg, "eta: ");
+	msg += strlen("eta: ");
+	if (secs < 100)
+		sprintf(msg, "%ds", secs);
+	else if (secs < 100 * 60)
+		sprintf(msg, "%dm%ds", secs / 60, secs % 60);
+	else if (secs < 48 * 3600)
+		sprintf(msg, "%dh%dm", secs / 3600, (secs / 60) % 60);
+	else if (secs < 100 * 86400)
+		sprintf(msg, "%dd%dh", secs / 86400, (secs / 3600) % 24);
+	else
+		sprintf(msg, ">2day");
+	return 0;
+}
+
+
 void
-print_progress(const char *msg, unsigned long current, unsigned long end)
+print_progress(const char *msg, unsigned long current, unsigned long end, struct timeval *start)
 {
 	float progress;
 	time_t tm;
 	static time_t last_time = 0;
 	static unsigned int lapse = 0;
 	static const char *spinner = "/|\\-";
+	struct timeval delta;
+	double eta;
+	char eta_msg[16] = " ";
 
 	if (current < end) {
 		tm = time(NULL);
@@ -354,13 +391,19 @@ print_progress(const char *msg, unsigned long current, unsigned long end)
 	} else
 		progress = 100;
 
+	if (start != NULL) {
+		calc_delta(start, &delta);
+		eta = delta.tv_sec + delta.tv_usec / 1e6;
+		eta = (100 - progress) * eta / progress;
+		eta_to_human_short(eta, eta_msg);
+	}
 	if (flag_ignore_r_char) {
-		PROGRESS_MSG("%-" PROGRESS_MAXLEN "s: [%5.1f %%] %c\n",
-			     msg, progress, spinner[lapse % 4]);
+		PROGRESS_MSG("%-" PROGRESS_MAXLEN "s: [%5.1f %%] %c  %16s\n",
+			     msg, progress, spinner[lapse % 4], eta_msg);
 	} else {
 		PROGRESS_MSG("\r");
-		PROGRESS_MSG("%-" PROGRESS_MAXLEN "s: [%5.1f %%] %c",
-			     msg, progress, spinner[lapse % 4]);
+		PROGRESS_MSG("%-" PROGRESS_MAXLEN "s: [%5.1f %%] %c  %16s",
+			     msg, progress, spinner[lapse % 4], eta_msg);
 	}
 	lapse++;
 }
@@ -368,19 +411,10 @@ print_progress(const char *msg, unsigned long current, unsigned long end)
 void
 print_execution_time(char *step_name, struct timeval *tv_start)
 {
-	struct timeval tv_end;
-	time_t diff_sec;
-	suseconds_t diff_usec;
+	struct timeval delta;
 
-	gettimeofday(&tv_end, NULL);
-
-	diff_sec  = tv_end.tv_sec - tv_start->tv_sec;
-	diff_usec = tv_end.tv_usec - tv_start->tv_usec;
-	if (diff_usec < 0) {
-		diff_sec--;
-		diff_usec += 1000000;
-	}
+	calc_delta(tv_start, &delta);
 	REPORT_MSG("STEP [%s] : %ld.%06ld seconds\n",
-		   step_name, diff_sec, diff_usec);
+		   step_name, delta.tv_sec, delta.tv_usec);
 }
 

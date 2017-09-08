@@ -138,11 +138,15 @@ static inline int
 sadump_is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 {
 	off_t offset;
+	ssize_t rcode;
 
 	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
 		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
 		lseek(bitmap->fd, offset, SEEK_SET);
-		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		rcode = read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		if (rcode != BUFSIZE_BITMAP)
+			ERRMSG("Can't read the bitmap(%s). %s\n",
+				bitmap->file_name, strerror(errno));
 		if (pfn == 0)
 			bitmap->no_block = 0;
 		else
@@ -640,7 +644,7 @@ restart:
 
 		if (memcmp(&sph->disk_set_id, &smh->disk_set_id,
 			   sizeof(efi_guid_t)) != 0) {
-			DEBUG_MSG("sadump: disk set ID mismtch\n");
+			DEBUG_MSG("sadump: disk set ID mismatch\n");
 			DEBUG_MSG("  partition header: %s\n",
 				  guid_to_str(&sph->disk_set_id, guid,
 					      sizeof(guid)));
@@ -2047,7 +2051,7 @@ DEBUG_MSG("sadump: No PT_LOAD in elfcorehdr for backup area\n");
 			bufsize = backup_src_size - total;
 
 		if (!readmem(PADDR, backup_offset + total, buf, bufsize)) {
-			ERRMSG("Can't read bacckup region. %s\n",
+			ERRMSG("Can't read backup region. %s\n",
 			       strerror(errno));
 			return;
 		}

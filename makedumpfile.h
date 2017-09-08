@@ -130,7 +130,6 @@ enum {
 	VADDR,
 	PADDR,
 	VADDR_XEN,
-	MADDR_XEN
 };
 
 /*
@@ -253,10 +252,14 @@ static inline int string_exists(char *s) { return (s ? TRUE : FALSE); }
 #define SYMBOL_INIT(symbol, str_symbol) \
 do { \
 	SYMBOL(symbol) = get_symbol_addr(str_symbol); \
+	if (SYMBOL(symbol) != NOT_FOUND_SYMBOL) \
+		SYMBOL(symbol) += info->kaslr_offset; \
 } while (0)
 #define SYMBOL_INIT_NEXT(symbol, str_symbol) \
 do { \
 	SYMBOL(symbol) = get_next_symbol_addr(str_symbol); \
+	if (SYMBOL(symbol) != NOT_FOUND_SYMBOL) \
+		SYMBOL(symbol) += info->kaslr_offset; \
 } while (0)
 #define WRITE_SYMBOL(str_symbol, symbol) \
 do { \
@@ -472,7 +475,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(4, 8, 1)/* linux-4.8.1 */
+#define LATEST_VERSION		KERNEL_VERSION(4, 11, 7)/* linux-4.11.7 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -495,6 +498,7 @@ do { \
 #define STR_CONFIG_X86_PAE	"CONFIG_X86_PAE=y"
 #define STR_CONFIG_PGTABLE_4	"CONFIG_PGTABLE_4=y"
 #define STR_CONFIG_PGTABLE_3	"CONFIG_PGTABLE_3=y"
+#define STR_KERNELOFFSET	"KERNELOFFSET="
 
 /*
  * common value
@@ -820,6 +824,93 @@ unsigned long get_kvbase_arm64(void);
 
 #endif          /* ia64 */
 
+#ifdef __sparc64__
+
+#define KVBASE			(SYMBOL(_stext))
+#define KVBASE_MASK		(0xffff)
+#define _SECTION_SIZE_BITS	(30)
+#define _MAX_PHYSMEM_BITS_L3	(49)
+#define _MAX_PHYSMEM_BITS_L4	(53)
+#define VMALLOC_START_SPARC64	(0x0000000100000000UL)
+#define VMEMMAP_BASE_SPARC64	(0x0000010000000000UL)
+#define VMEMMAP_CHUNK_SHIFT	(22)
+#define VMEMMAP_CHUNK		(1UL << VMEMMAP_CHUNK_SHIFT)
+#define VMEMMAP_CHUNK_MASK	(~(VMEMMAP_CHUNK - 1UL))
+
+#define PAGE_SHIFT		13
+#define PAGE_SIZE		(1UL << PAGE_SHIFT)
+#define PAGE_MASK		(~(PAGE_SIZE - 1))
+
+#define MAX_PHYS_ADDRESS_LOBITS	(41)
+#define NR_CHUNKS_SHIFT		(MAX_PHYS_ADDRESS_LOBITS - PAGE_SHIFT + 6)
+#define NR_CHUNKS_MASK		(~((1UL << NR_CHUNKS_SHIFT) - 1))
+
+#define PMD_SHIFT		(PAGE_SHIFT + (PAGE_SHIFT - 3))
+#define PMD_SIZE		(1UL << PMD_SHIFT)
+#define PMD_MASK		(~(PMD_SIZE - 1))
+#define PMD_BITS		(PAGE_SHIFT - 3)
+
+#define PUD_SHIFT		(PMD_SHIFT + PMD_BITS)
+#define PUD_SIZE		(1UL << PUD_SHIFT)
+#define PUD_MASK		(~(PUD_SIZE - 1))
+#define PUD_BITS		(PAGE_SHIFT - 3)
+
+#define PGDIR_SHIFT_L4		(PUD_SHIFT + PUD_BITS)
+#define PGDIR_SIZE_L4		(1UL << PGDIR_SHIFT_L4)
+#define PGDIR_MASK_L4		(~(PGDIR_SIZE_L4 - 1))
+
+#define PGDIR_SHIFT_L3		(PMD_SHIFT + PMD_BITS)
+#define PGDIR_SIZE_L3		(1UL << PGDIR_SHIFT_L3)
+#define PGDIR_MASK_L3		(~(PGDIR_SIZE_L3 - 1))
+
+#define PGDIR_BITS		(PAGE_SHIFT - 3)
+
+#define PTRS_PER_PTE		(1UL << (PAGE_SHIFT - 3))
+#define PTRS_PER_PMD		(1UL << PMD_BITS)
+#define PTRS_PER_PUD		(1UL << PUD_BITS)
+#define PTRS_PER_PGD		(1UL << PGDIR_BITS)
+
+#define _PAGE_PMD_HUGE		(0x0100000000000000UL)
+#define _PAGE_PUD_HUGE		_PAGE_PMD_HUGE
+#define _PAGE_PADDR_4V		(0x00FFFFFFFFFFE000UL)
+#define _PAGE_PRESENT_4V	(0x0000000000000010UL)
+
+typedef unsigned long pte_t;
+typedef unsigned long pmd_t;
+typedef unsigned long pud_t;
+typedef unsigned long pgd_t;
+
+#define pud_none(pud)		(!(pud))
+#define pgd_none(pgd)		(!(pgd))
+#define pmd_none(pmd)		(!(pmd))
+
+#define pte_to_pa(pte) (pte & _PAGE_PADDR_4V)
+
+#define pgd_index_l4(addr) (((addr) >> PGDIR_SHIFT_L4) & (PTRS_PER_PGD - 1))
+#define pgd_offset_l4(pgdir,addr)	((unsigned long) \
+				 ((pgd_t *)pgdir + pgd_index_l4(addr)))
+
+#define pgd_index_l3(addr) (((addr) >> PGDIR_SHIFT_L3) & (PTRS_PER_PGD - 1))
+#define pgd_offset_l3(pgdir,addr)	((unsigned long) \
+				 ((pgd_t *)pgdir + pgd_index_l3(addr)))
+
+#define pud_index(addr)		(((addr) >> PUD_SHIFT) & (PTRS_PER_PUD - 1))
+#define pud_offset(pgdp, addr)	((unsigned long) \
+				 ((pud_t *)pgdp + pud_index(addr)))
+#define pud_large(pud)		(pud & _PAGE_PUD_HUGE)
+
+#define pmd_index(addr)		(((addr) >> PMD_SHIFT) & (PTRS_PER_PMD - 1))
+#define pmd_offset(pudp, addr)	((unsigned long) \
+				 ((pmd_t *)pudp + pmd_index(addr)))
+#define pmd_large(pmd)		(pmd & _PAGE_PMD_HUGE)
+
+#define pte_index(addr)		(((addr) >> PAGE_SHIFT) & (PTRS_PER_PTE - 1))
+#define pte_offset(pmdp, addr)	((unsigned long) \
+				 ((pte_t *)(pte_to_pa(pmdp) + pte_index(addr))))
+#define pte_present(pte)	(pte & _PAGE_PRESENT_4V)
+
+#endif          /* sparc64 */
+
 /*
  * The function of dependence on machine
  */
@@ -838,6 +929,7 @@ int get_xen_info_arm64(void);
 #define get_phys_base()		get_phys_base_arm64()
 #define get_machdep_info()	get_machdep_info_arm64()
 #define get_versiondep_info()	get_versiondep_info_arm64()
+#define get_kaslr_offset(X)	stub_false()
 #define get_xen_basic_info_arch(X) get_xen_basic_info_arm64(X)
 #define get_xen_info_arch(X) get_xen_info_arm64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
@@ -851,6 +943,7 @@ unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
 #define get_phys_base()		get_phys_base_arm()
 #define get_machdep_info()	get_machdep_info_arm()
 #define get_versiondep_info()	stub_true()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_arm(X)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif /* arm */
@@ -863,11 +956,13 @@ unsigned long long vaddr_to_paddr_x86(unsigned long vaddr);
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_x86()
 #define get_versiondep_info()	get_versiondep_info_x86()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86(X)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif /* x86 */
 
 #ifdef __x86_64__
+unsigned long get_kaslr_offset_x86_64(unsigned long vaddr);
 int get_phys_base_x86_64(void);
 int get_machdep_info_x86_64(void);
 int get_versiondep_info_x86_64(void);
@@ -876,6 +971,7 @@ unsigned long long vtop4_x86_64(unsigned long vaddr);
 #define get_phys_base()		get_phys_base_x86_64()
 #define get_machdep_info()	get_machdep_info_x86_64()
 #define get_versiondep_info()	get_versiondep_info_x86_64()
+#define get_kaslr_offset(X)	get_kaslr_offset_x86_64(X)
 #define vaddr_to_paddr(X)	vtop4_x86_64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif /* x86_64 */
@@ -888,6 +984,7 @@ unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc64()
 #define get_versiondep_info()	get_versiondep_info_ppc64()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc64 */
@@ -899,6 +996,7 @@ unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc()
 #define get_versiondep_info()	stub_true()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc(X)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* powerpc32 */
@@ -911,6 +1009,7 @@ int is_iomem_phys_addr_s390x(unsigned long addr);
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_s390x()
 #define get_versiondep_info()	stub_true()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_s390x(X)
 #define is_phys_addr(X)		is_iomem_phys_addr_s390x(X)
 #endif          /* s390x */
@@ -923,10 +1022,23 @@ unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define get_machdep_info()	get_machdep_info_ia64()
 #define get_phys_base()		get_phys_base_ia64()
 #define get_versiondep_info()	stub_true()
+#define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ia64(X)
 #define VADDR_REGION(X)		(((unsigned long)(X)) >> REGION_SHIFT)
 #define is_phys_addr(X)		stub_true_ul(X)
 #endif          /* ia64 */
+
+#ifdef __sparc64__ /* sparc64 */
+int get_versiondep_info_sparc64(void);
+int get_phys_base_sparc64(void);
+unsigned long long vaddr_to_paddr_sparc64(unsigned long vaddr);
+#define find_vmemmap()          stub_false()
+#define get_machdep_info()      TRUE
+#define get_phys_base()         get_phys_base_sparc64()
+#define get_versiondep_info()   get_versiondep_info_sparc64()
+#define vaddr_to_paddr(X)       vaddr_to_paddr_sparc64(X)
+#define is_phys_addr(X)		stub_true_ul(X)
+#endif		/* sparc64 */
 
 typedef unsigned long long mdf_pfn_t;
 
@@ -1129,6 +1241,7 @@ struct DumpInfo {
 	int		flag_force;	     /* overwrite existing stuff */
 	int		flag_exclude_xen_dom;/* exclude Domain-U from xen-kdump */
 	int             flag_dmesg;          /* dump the dmesg log out of the vmcore file */
+	int             flag_partial_dmesg;  /* dmesg dump only from the last cleared index*/
 	int             flag_mem_usage;  /*show the page number of memory in different use*/
 	int		flag_use_printk_log; /* did we read printk_log symbol name? */
 	int		flag_nospace;	     /* the flag of "No space on device" error */
@@ -1152,6 +1265,7 @@ struct DumpInfo {
 	int		vmemmap_psize;
 	int		vmemmap_cnt;
 	struct ppc64_vmemmap	*vmemmap_list;
+	unsigned long	kaslr_offset;
 
 	/*
 	 * page table info for ppc64
@@ -1416,6 +1530,7 @@ struct symbol_table {
 	unsigned long long	log_buf_len;
 	unsigned long long	log_end;
 	unsigned long long	log_first_idx;
+	unsigned long long	clear_idx;
 	unsigned long long	log_next_idx;
 	unsigned long long	max_pfn;
 	unsigned long long	node_remap_start_vaddr;
@@ -1474,6 +1589,11 @@ struct symbol_table {
 	unsigned long long		cpu_pgd;
 	unsigned long long		demote_segment_4k;
 	unsigned long long		cur_cpu_spec;
+
+	/*
+	 * symbols on sparc64 arch
+	 */
+	unsigned long long		vmemmap_table;
 };
 
 struct size_table {
@@ -1803,6 +1923,7 @@ struct memory_range {
 struct memory_range crash_reserved_mem[CRASH_RESERVED_MEM_NR];
 int crash_reserved_mem_nr;
 
+unsigned long read_vmcoreinfo_symbol(char *str_symbol);
 int readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size);
 int get_str_osrelease_from_vmlinux(void);
 int read_vmcoreinfo_xen(void);
@@ -1952,6 +2073,12 @@ int get_xen_info_ia64(void);
 #define get_xen_info_arch(X) FALSE
 #endif	/* s390x */
 
+#ifdef __sparc64__ /* sparc64 */
+#define kvtop_xen(X)	FALSE
+#define get_xen_basic_info_arch(X) FALSE
+#define get_xen_info_arch(X) FALSE
+#endif	/* sparc64 */
+
 struct cycle {
 	mdf_pfn_t start_pfn;
 	mdf_pfn_t end_pfn;
@@ -1981,6 +2108,7 @@ static inline int
 is_dumpable_file(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 {
 	off_t offset;
+	ssize_t rcode;
 	if (pfn == 0 || bitmap->no_block != pfn/PFN_BUFBITMAP) {
 		offset = bitmap->offset + BUFSIZE_BITMAP*(pfn/PFN_BUFBITMAP);
 		if (lseek(bitmap->fd, offset, SEEK_SET) < 0 ) {
@@ -1989,7 +2117,10 @@ is_dumpable_file(struct dump_bitmap *bitmap, mdf_pfn_t pfn)
 			return FALSE;
 		}
 
-		read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		rcode = read(bitmap->fd, bitmap->buf, BUFSIZE_BITMAP);
+		if (rcode != BUFSIZE_BITMAP)
+			ERRMSG("Can't read the bitmap(%s). %s\n",
+				bitmap->file_name, strerror(errno));
 		if (pfn == 0)
 			bitmap->no_block = 0;
 		else
@@ -2143,6 +2274,7 @@ struct elf_prstatus {
 #define OPT_SPLITBLOCK_SIZE	OPT_START+14
 #define OPT_WORKING_DIR         OPT_START+15
 #define OPT_NUM_THREADS	OPT_START+16
+#define OPT_PARTIAL_DMESG	OPT_START+17
 
 /*
  * Function Prototype.
@@ -2151,6 +2283,7 @@ mdf_pfn_t get_num_dumpable_cyclic(void);
 mdf_pfn_t get_num_dumpable_cyclic_withsplit(void);
 int get_loads_dumpfile_cyclic(void);
 int initial_xen(void);
+unsigned long long ptom_xen(unsigned long long paddr);
 unsigned long long get_free_memory_size(void);
 int calculate_cyclic_buffer_size(void);
 int prepare_splitblock_table(void);

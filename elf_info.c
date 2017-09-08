@@ -372,7 +372,7 @@ int set_kcore_vmcoreinfo(uint64_t vmcoreinfo_addr, uint64_t vmcoreinfo_len)
 	off_t offset_desc;
 
 	offset = UNINITIALIZED;
-	kvaddr = (ulong)vmcoreinfo_addr | PAGE_OFFSET;
+	kvaddr = (ulong)vmcoreinfo_addr + PAGE_OFFSET;
 
 	for (i = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
@@ -826,9 +826,12 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 				temp_seg.virt_end = vend;
 				temp_seg.file_offset = (*pt_loads)[i].file_offset
 					+ temp_seg.virt_start - (*pt_loads)[i].virt_start;
+				temp_seg.file_size = temp_seg.phys_end
+					- temp_seg.phys_start;
 
 				(*pt_loads)[i].virt_end = kvstart - 1;
 				(*pt_loads)[i].phys_end =  start - 1;
+				(*pt_loads)[i].file_size -= temp_seg.file_size;
 
 				tidx = i+1;
 			} else if (kvstart != vstart) {
@@ -838,6 +841,7 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 				(*pt_loads)[i].phys_start = end + 1;
 				(*pt_loads)[i].virt_start = kvend + 1;
 			}
+			(*pt_loads)[i].file_size -= (end -start);
 		}
 	}
 	/* Insert split load segment, if any. */
@@ -857,22 +861,6 @@ static int exclude_segment(struct pt_load_segment **pt_loads,
 	return 0;
 }
 
-static int
-process_dump_load(struct pt_load_segment	*pls)
-{
-	unsigned long long paddr;
-
-	paddr = vaddr_to_paddr(pls->virt_start);
-	pls->phys_start  = paddr;
-	pls->phys_end    = paddr + (pls->virt_end - pls->virt_start);
-	DEBUG_MSG("process_dump_load\n");
-	DEBUG_MSG("  phys_start : %llx\n", pls->phys_start);
-	DEBUG_MSG("  phys_end   : %llx\n", pls->phys_end);
-	DEBUG_MSG("  virt_start : %llx\n", pls->virt_start);
-	DEBUG_MSG("  virt_end   : %llx\n", pls->virt_end);
-
-	return TRUE;
-}
 
 int get_kcore_dump_loads(void)
 {
@@ -881,7 +869,8 @@ int get_kcore_dump_loads(void)
 
 	for (i = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
-		if (!is_phys_addr(p->virt_start))
+		if (p->phys_start == NOT_PADDR
+				|| !is_phys_addr(p->virt_start))
 			continue;
 		loads++;
 	}
@@ -901,21 +890,24 @@ int get_kcore_dump_loads(void)
 
 	for (i = 0, j = 0; i < num_pt_loads; ++i) {
 		struct pt_load_segment *p = &pt_loads[i];
-		if (!is_phys_addr(p->virt_start))
+		if (p->phys_start == NOT_PADDR
+				|| !is_phys_addr(p->virt_start))
 			continue;
-		if (j >= loads)
+		if (j >= loads) {
+			free(pls);
 			return FALSE;
+		}
 
 		if (j == 0) {
 			offset_pt_load_memory = p->file_offset;
 			if (offset_pt_load_memory == 0) {
 				ERRMSG("Can't get the offset of page data.\n");
+				free(pls);
 				return FALSE;
 			}
 		}
 
 		pls[j] = *p;
-		process_dump_load(&pls[j]);
 		j++;
 	}
 

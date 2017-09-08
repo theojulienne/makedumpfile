@@ -33,22 +33,81 @@ get_xen_p2m_mfn(void)
 	return NOT_FOUND_LONG_VALUE;
 }
 
+unsigned long
+get_kaslr_offset_x86_64(unsigned long vaddr)
+{
+	unsigned int i;
+	char buf[BUFSIZE_FGETS], *endp;
+
+	if (!info->kaslr_offset && info->file_vmcoreinfo) {
+		if (fseek(info->file_vmcoreinfo, 0, SEEK_SET) < 0) {
+			ERRMSG("Can't seek the vmcoreinfo file(%s). %s\n",
+					info->name_vmcoreinfo, strerror(errno));
+			return FALSE;
+		}
+
+		while (fgets(buf, BUFSIZE_FGETS, info->file_vmcoreinfo)) {
+			i = strlen(buf);
+			if (!i)
+				break;
+			if (buf[i - 1] == '\n')
+				buf[i - 1] = '\0';
+			if (strncmp(buf, STR_KERNELOFFSET,
+					strlen(STR_KERNELOFFSET)) == 0)
+				info->kaslr_offset =
+					strtoul(buf+strlen(STR_KERNELOFFSET),&endp,16);
+		}
+	}
+	if (vaddr >= __START_KERNEL_map &&
+			vaddr < __START_KERNEL_map + info->kaslr_offset)
+		return info->kaslr_offset;
+	else
+		/*
+		 * TODO: we need to check if it is vmalloc/vmmemmap/module
+		 * address, we will have different offset
+		 */
+		return 0;
+}
+
 static int
 get_page_offset_x86_64(void)
 {
 	int i;
 	unsigned long long phys_start;
 	unsigned long long virt_start;
+	unsigned long page_offset_base;
 
-	for (i = 0; get_pt_load(i, &phys_start, NULL, &virt_start, NULL); i++) {
-		if (virt_start < __START_KERNEL_map) {
-			info->page_offset = virt_start - phys_start;
-			return TRUE;
+	if (info->kaslr_offset) {
+		page_offset_base = get_symbol_addr("page_offset_base");
+		page_offset_base += info->kaslr_offset;
+		if (!readmem(VADDR, page_offset_base, &info->page_offset,
+					sizeof(info->page_offset))) {
+			 ERRMSG("Can't read page_offset_base.\n");
+			 return FALSE;
+		}
+		return TRUE;
+	}
+
+	if (get_num_pt_loads()) {
+		for (i = 0;
+			get_pt_load(i, &phys_start, NULL, &virt_start, NULL);
+			i++) {
+			if (virt_start != NOT_KV_ADDR
+					&& virt_start < __START_KERNEL_map
+					&& phys_start != NOT_PADDR) {
+				info->page_offset = virt_start - phys_start;
+				return TRUE;
+			}
 		}
 	}
 
-	ERRMSG("Can't get any pt_load to calculate page offset.\n");
-	return FALSE;
+	if (info->kernel_version < KERNEL_VERSION(2, 6, 27)) {
+		info->page_offset = __PAGE_OFFSET_ORIG;
+	} else {
+		info->page_offset = __PAGE_OFFSET_2_6_27;
+	}
+
+	return TRUE;
 }
 
 int
@@ -76,7 +135,8 @@ get_phys_base_x86_64(void)
 	}
 
 	for (i = 0; get_pt_load(i, &phys_start, NULL, &virt_start, NULL); i++) {
-		if (virt_start >= __START_KERNEL_map) {
+		if (virt_start >= __START_KERNEL_map
+				&& phys_start != NOT_PADDR) {
 
 			info->phys_base = phys_start -
 			    (virt_start & ~(__START_KERNEL_map));
@@ -110,7 +170,7 @@ get_machdep_info_x86_64(void)
 		ERRMSG("Can't get p2m_mfn address.\n");
 		return FALSE;
 	}
-	if (!readmem(MADDR_XEN, pfn_to_paddr(p2m_mfn),
+	if (!readmem(PADDR, pfn_to_paddr(p2m_mfn),
 		     &frame_mfn, PAGESIZE())) {
 		ERRMSG("Can't read p2m_mfn.\n");
 		return FALSE;
@@ -124,7 +184,7 @@ get_machdep_info_x86_64(void)
 		if (!frame_mfn[i])
 			break;
 
-		if (!readmem(MADDR_XEN, pfn_to_paddr(frame_mfn[i]), &buf,
+		if (!readmem(PADDR, pfn_to_paddr(frame_mfn[i]), &buf,
 		    PAGESIZE())) {
 			ERRMSG("Can't get frame_mfn[%d].\n", i);
 			return FALSE;
@@ -152,7 +212,7 @@ get_machdep_info_x86_64(void)
 		if (!frame_mfn[i])
 			break;
 
-		if (!readmem(MADDR_XEN, pfn_to_paddr(frame_mfn[i]),
+		if (!readmem(PADDR, pfn_to_paddr(frame_mfn[i]),
 		    &info->p2m_mfn_frame_list[i * MFNS_PER_FRAME],
 		    mfns[i] * sizeof(unsigned long))) {
 			ERRMSG("Can't get p2m_mfn_frame_list.\n");
@@ -209,6 +269,11 @@ vtop4_x86_64(unsigned long vaddr)
 	 * Get PGD.
 	 */
 	page_dir = SYMBOL(init_level4_pgt) - __START_KERNEL_map + info->phys_base;
+	if (is_xen_memory()) {
+		page_dir = ptom_xen(page_dir);
+		if (page_dir == NOT_PADDR)
+			return NOT_PADDR;
+	}
 	page_dir += pml4_index(vaddr) * sizeof(unsigned long);
 	if (!readmem(PADDR, page_dir, &pml4, sizeof pml4)) {
 		ERRMSG("Can't get pml4 (page_dir:%lx).\n", page_dir);
@@ -301,7 +366,7 @@ kvtop_xen_x86_64(unsigned long kvaddr)
 	if ((dirp = kvtop_xen_x86_64(SYMBOL(pgd_l4))) == NOT_PADDR)
 		return NOT_PADDR;
 	dirp += pml4_index(kvaddr) * sizeof(unsigned long long);
-	if (!readmem(MADDR_XEN, dirp, &entry, sizeof(entry)))
+	if (!readmem(PADDR, dirp, &entry, sizeof(entry)))
 		return NOT_PADDR;
 
 	if (!(entry & _PAGE_PRESENT))
@@ -309,7 +374,7 @@ kvtop_xen_x86_64(unsigned long kvaddr)
 
 	dirp = entry & ENTRY_MASK;
 	dirp += pgd_index(kvaddr) * sizeof(unsigned long long);
-	if (!readmem(MADDR_XEN, dirp, &entry, sizeof(entry)))
+	if (!readmem(PADDR, dirp, &entry, sizeof(entry)))
 		return NOT_PADDR;
 
 	if (!(entry & _PAGE_PRESENT))
@@ -321,7 +386,7 @@ kvtop_xen_x86_64(unsigned long kvaddr)
 
 	dirp = entry & ENTRY_MASK;
 	dirp += pmd_index(kvaddr) * sizeof(unsigned long long);
-	if (!readmem(MADDR_XEN, dirp, &entry, sizeof(entry)))
+	if (!readmem(PADDR, dirp, &entry, sizeof(entry)))
 		return NOT_PADDR;
 
 	if (!(entry & _PAGE_PRESENT))
@@ -333,7 +398,7 @@ kvtop_xen_x86_64(unsigned long kvaddr)
 
 	dirp = entry & ENTRY_MASK;
 	dirp += pte_index(kvaddr) * sizeof(unsigned long long);
-	if (!readmem(MADDR_XEN, dirp, &entry, sizeof(entry)))
+	if (!readmem(PADDR, dirp, &entry, sizeof(entry)))
 		return NOT_PADDR;
 
 	if (!(entry & _PAGE_PRESENT)) {

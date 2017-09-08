@@ -149,7 +149,7 @@ ptom_xen(unsigned long long paddr)
 	}
 	maddr = pfn_to_paddr(info->p2m_mfn_frame_list[mfn_idx])
 		+ sizeof(unsigned long) * frame_idx;
-	if (!readmem(MADDR_XEN, maddr, &mfn, sizeof(mfn))) {
+	if (!readmem(PADDR, maddr, &mfn, sizeof(mfn))) {
 		ERRMSG("Can't get mfn.\n");
 		return NOT_PADDR;
 	}
@@ -181,7 +181,7 @@ get_max_mapnr(void)
 	}
 
 	max_paddr = get_max_paddr();
-	info->max_mapnr = paddr_to_pfn(max_paddr);
+	info->max_mapnr = paddr_to_pfn(roundup(max_paddr, PAGESIZE()));
 
 	DEBUG_MSG("\n");
 	DEBUG_MSG("max_mapnr    : %llx\n", info->max_mapnr);
@@ -211,7 +211,7 @@ get_dom0_mapnr()
 		unsigned i;
 
 		maddr = pfn_to_paddr(info->p2m_mfn_frame_list[mfn_idx]);
-		if (!readmem(MADDR_XEN, maddr, &mfns, sizeof(mfns))) {
+		if (!readmem(PADDR, maddr, &mfns, sizeof(mfns))) {
 			ERRMSG("Can't read %ld domain-0 mfns at 0x%llu\n",
 				(long)MFNS_PER_FRAME, maddr);
 			return FALSE;
@@ -924,7 +924,7 @@ int
 readmem(int type_addr, unsigned long long addr, void *bufptr, size_t size)
 {
 	size_t read_size, size_orig = size;
-	unsigned long long paddr, maddr = NOT_PADDR;
+	unsigned long long paddr;
 	unsigned long long pgaddr;
 	void *pgbuf;
 	struct cache_entry *cached;
@@ -937,25 +937,9 @@ next_page:
 			    addr);
 			goto error;
 		}
-		if (is_xen_memory()) {
-			if ((maddr = ptom_xen(paddr)) == NOT_PADDR) {
-				ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
-				    paddr);
-				return FALSE;
-			}
-			paddr = maddr;
-		}
 		break;
 	case PADDR:
 		paddr = addr;
-		if (is_xen_memory()) {
-			if ((maddr  = ptom_xen(paddr)) == NOT_PADDR) {
-				ERRMSG("Can't convert a physical address(%llx) to machine address.\n",
-				    paddr);
-				return FALSE;
-			}
-			paddr = maddr;
-		}
 		break;
 	case VADDR_XEN:
 		if ((paddr = kvtop_xen(addr)) == NOT_PADDR) {
@@ -963,9 +947,6 @@ next_page:
 			    addr);
 			goto error;
 		}
-		break;
-	case MADDR_XEN:
-		paddr = addr;
 		break;
 	default:
 		ERRMSG("Invalid address type (%d).\n", type_addr);
@@ -1517,6 +1498,7 @@ get_symbol_info(void)
 	SYMBOL_INIT(log_buf_len, "log_buf_len");
 	SYMBOL_INIT(log_end, "log_end");
 	SYMBOL_INIT(log_first_idx, "log_first_idx");
+	SYMBOL_INIT(clear_idx, "clear_idx");
 	SYMBOL_INIT(log_next_idx, "log_next_idx");
 	SYMBOL_INIT(max_pfn, "max_pfn");
 	SYMBOL_INIT(modules, "modules");
@@ -2134,6 +2116,7 @@ write_vmcoreinfo_data(void)
 	WRITE_SYMBOL("log_buf_len", log_buf_len);
 	WRITE_SYMBOL("log_end", log_end);
 	WRITE_SYMBOL("log_first_idx", log_first_idx);
+	WRITE_SYMBOL("clear_idx", clear_idx);
 	WRITE_SYMBOL("log_next_idx", log_next_idx);
 	WRITE_SYMBOL("max_pfn", max_pfn);
 	WRITE_SYMBOL("high_memory", high_memory);
@@ -2528,6 +2511,7 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("log_buf_len", log_buf_len);
 	READ_SYMBOL("log_end", log_end);
 	READ_SYMBOL("log_first_idx", log_first_idx);
+	READ_SYMBOL("clear_idx", clear_idx);
 	READ_SYMBOL("log_next_idx", log_next_idx);
 	READ_SYMBOL("max_pfn", max_pfn);
 	READ_SYMBOL("high_memory", high_memory);
@@ -3782,6 +3766,46 @@ free_for_parallel()
 }
 
 int
+find_kaslr_offsets()
+{
+	off_t offset;
+	unsigned long size;
+	int ret = FALSE;
+
+	get_vmcoreinfo(&offset, &size);
+
+	if (!(info->name_vmcoreinfo = strdup(FILENAME_VMCOREINFO))) {
+		MSG("Can't duplicate strings(%s).\n", FILENAME_VMCOREINFO);
+		return FALSE;
+	}
+	if (!copy_vmcoreinfo(offset, size))
+		goto out;
+
+	if (!open_vmcoreinfo("r"))
+		goto out;
+
+	unlink(info->name_vmcoreinfo);
+
+	/*
+	 * This arch specific function should update info->kaslr_offset. If
+	 * kaslr is not enabled then offset will be set to 0. arch specific
+	 * function might need to read from vmcoreinfo, therefore we have
+	 * called this function between open_vmcoreinfo() and
+	 * close_vmcoreinfo()
+	 */
+	get_kaslr_offset(SYMBOL(_stext));
+
+	close_vmcoreinfo();
+
+	ret = TRUE;
+out:
+	free(info->name_vmcoreinfo);
+	info->name_vmcoreinfo = NULL;
+
+	return ret;
+}
+
+int
 initial(void)
 {
 	off_t offset;
@@ -3833,6 +3857,9 @@ initial(void)
 		set_dwarf_debuginfo("vmlinux", NULL,
 					info->name_vmlinux, info->fd_vmlinux);
 
+		if (has_vmcoreinfo() && !find_kaslr_offsets())
+			return FALSE;
+
 		if (!get_symbol_info())
 			return FALSE;
 
@@ -3878,9 +3905,6 @@ initial(void)
 	if (!get_value_for_old_linux())
 		return FALSE;
 
-	if (info->flag_mem_usage && !get_kcore_dump_loads())
-		return FALSE;
-
 	if (info->flag_refiltering) {
 		if (info->flag_elf_dumpfile) {
 			MSG("'-E' option is disable, ");
@@ -3919,9 +3943,7 @@ initial(void)
 		 * postponed until debug information becomes
 		 * available.
 		 */
-
-	} else if (!get_phys_base())
-		return FALSE;
+	}
 
 out:
 	if (!info->page_size) {
@@ -3932,6 +3954,18 @@ out:
 		if (!fallback_to_current_page_size())
 			return FALSE;
 	}
+
+	if (!is_xen_memory() && !cache_init())
+		return FALSE;
+
+	if (info->flag_mem_usage && !get_kcore_dump_loads())
+		return FALSE;
+
+	if (!info->flag_refiltering && !info->flag_sadump) {
+		if (!get_phys_base())
+			return FALSE;
+	}
+
 	if (!get_max_mapnr())
 		return FALSE;
 
@@ -3999,9 +4033,6 @@ out:
 			return FALSE;
 		}
 	}
-
-	if (!is_xen_memory() && !cache_init())
-		return FALSE;
 
 	if (debug_info && !get_machdep_info())
 		return FALSE;
@@ -4521,7 +4552,8 @@ exclude_nodata_pages(struct cycle *cycle)
 		unsigned long long pfn, pfn_end;
 
 		pfn = paddr_to_pfn(phys_start + file_size);
-		pfn_end = paddr_to_pfn(phys_end);
+		pfn_end = paddr_to_pfn(roundup(phys_end, PAGESIZE()));
+
 		if (pfn < cycle->start_pfn)
 			pfn = cycle->start_pfn;
 		if (pfn_end >= cycle->end_pfn)
@@ -5001,6 +5033,7 @@ dump_dmesg()
 	int log_buf_len, length_log, length_oldlog, ret = FALSE;
 	unsigned long index, log_buf, log_end;
 	unsigned int idx, log_first_idx, log_next_idx;
+	unsigned long long first_idx_sym;
 	unsigned long log_end_2_6_24;
 	unsigned      log_end_2_6_25;
 	char *log_buffer = NULL, *log_ptr = NULL;
@@ -5034,7 +5067,13 @@ dump_dmesg()
 			ERRMSG("Can't find variable-length record symbols");
 			return FALSE;
 		} else {
-			if (!readmem(VADDR, SYMBOL(log_first_idx), &log_first_idx,
+			if (info->flag_partial_dmesg
+			    && SYMBOL(clear_idx) != NOT_FOUND_SYMBOL)
+				first_idx_sym = SYMBOL(clear_idx);
+			else
+				first_idx_sym = SYMBOL(log_first_idx);
+
+			if (!readmem(VADDR, first_idx_sym, &log_first_idx,
 			    sizeof(log_first_idx))) {
 				ERRMSG("Can't get log_first_idx.\n");
 				return FALSE;
@@ -5078,7 +5117,10 @@ dump_dmesg()
 	DEBUG_MSG("log_buf       : %lx\n", log_buf);
 	DEBUG_MSG("log_end       : %lx\n", log_end);
 	DEBUG_MSG("log_buf_len   : %d\n", log_buf_len);
-	DEBUG_MSG("log_first_idx : %u\n", log_first_idx);
+	if (info->flag_partial_dmesg)
+		DEBUG_MSG("clear_idx : %u\n", log_first_idx);
+	else
+		DEBUG_MSG("log_first_idx : %u\n", log_first_idx);
 	DEBUG_MSG("log_next_idx  : %u\n", log_next_idx);
 
 	if ((log_buffer = malloc(log_buf_len)) == NULL) {
@@ -5175,7 +5217,7 @@ _exclude_free_page(struct cycle *cycle)
 
 	for (num_nodes = 1; num_nodes <= vt.numnodes; num_nodes++) {
 
-		print_progress(PROGRESS_FREE_PAGES, num_nodes - 1, vt.numnodes);
+		print_progress(PROGRESS_FREE_PAGES, num_nodes - 1, vt.numnodes, NULL);
 
 		node_zones = pgdat + OFFSET(pglist_data.node_zones);
 
@@ -5188,7 +5230,7 @@ _exclude_free_page(struct cycle *cycle)
 		for (i = 0; i < nr_zones; i++) {
 
 			print_progress(PROGRESS_FREE_PAGES, i + nr_zones * (num_nodes - 1),
-					nr_zones * vt.numnodes);
+					nr_zones * vt.numnodes, NULL);
 
 			zone = node_zones + (i * SIZE(zone));
 			if (!readmem(VADDR, zone + OFFSET(zone.spanned_pages),
@@ -5216,7 +5258,7 @@ _exclude_free_page(struct cycle *cycle)
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_FREE_PAGES, vt.numnodes, vt.numnodes);
+	print_progress(PROGRESS_FREE_PAGES, vt.numnodes, vt.numnodes, NULL);
 	print_execution_time(PROGRESS_FREE_PAGES, &tv_start);
 
 	return TRUE;
@@ -5403,13 +5445,16 @@ create_1st_bitmap_file(void)
 	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 
 		if (!info->flag_mem_usage)
-			print_progress(PROGRESS_HOLES, i, num_pt_loads);
+			print_progress(PROGRESS_HOLES, i, num_pt_loads, NULL);
 
 		pfn_start = paddr_to_pfn(phys_start);
 		pfn_end   = paddr_to_pfn(phys_end);
 		if (pfn_start > info->max_mapnr)
 			continue;
 		pfn_end = MIN(pfn_end, info->max_mapnr);
+		/* Account for last page if it has less than page_size data in it */
+		if (phys_end & (info->page_size - 1))
+			++pfn_end;
 
 		for (pfn = pfn_start; pfn < pfn_end; pfn++) {
 			set_bit_on_1st_bitmap(pfn, NULL);
@@ -5422,7 +5467,7 @@ create_1st_bitmap_file(void)
 	 * print 100 %
 	 */
 	if (!info->flag_mem_usage) {
-		print_progress(PROGRESS_HOLES, info->max_mapnr, info->max_mapnr);
+		print_progress(PROGRESS_HOLES, info->max_mapnr, info->max_mapnr, NULL);
 		print_execution_time(PROGRESS_HOLES, &tv_start);
 	}
 
@@ -5493,18 +5538,10 @@ exclude_zero_pages_cyclic(struct cycle *cycle)
 		if (!is_dumpable(info->bitmap2, pfn, cycle))
 			continue;
 
-		if (is_xen_memory()) {
-			if (!readmem(MADDR_XEN, paddr, buf, info->page_size)) {
-				ERRMSG("Can't get the page data(pfn:%llx, max_mapnr:%llx).\n",
-				    pfn, info->max_mapnr);
-				return FALSE;
-			}
-		} else {
-			if (!readmem(PADDR, paddr, buf, info->page_size)) {
-				ERRMSG("Can't get the page data(pfn:%llx, max_mapnr:%llx).\n",
-				    pfn, info->max_mapnr);
-				return FALSE;
-			}
+		if (!readmem(PADDR, paddr, buf, info->page_size)) {
+			ERRMSG("Can't get the page data(pfn:%llx, max_mapnr:%llx).\n",
+			    pfn, info->max_mapnr);
+			return FALSE;
 		}
 		if (is_zero_page(buf, info->page_size)) {
 			if (clear_bit_on_2nd_bitmap(pfn, cycle))
@@ -5548,7 +5585,7 @@ create_bitmap_from_memhole(struct cycle *cycle, struct dump_bitmap *bitmap, int 
 		pfn_start = MAX(paddr_to_pfn(phys_start), cycle->start_pfn);
 		pfn_end = MIN(paddr_to_pfn(phys_end), cycle->end_pfn);
 
-		print_progress(PROGRESS_HOLES, i, num_pt_loads);
+		print_progress(PROGRESS_HOLES, i, num_pt_loads, NULL);
 
 		if (pfn_start >= pfn_end)
 			continue;
@@ -5587,7 +5624,7 @@ create_bitmap_from_memhole(struct cycle *cycle, struct dump_bitmap *bitmap, int 
 	/*
 	 * print 100 %
 	 */
-	print_progress(PROGRESS_HOLES, info->max_mapnr, info->max_mapnr);
+	print_progress(PROGRESS_HOLES, info->max_mapnr, info->max_mapnr, NULL);
 	print_execution_time(PROGRESS_HOLES, &tv_start);
 
 	return TRUE;
@@ -5842,7 +5879,7 @@ exclude_unnecessary_pages(struct cycle *cycle)
 	for (mm = 0; mm < info->num_mem_map; mm++) {
 
 		if (!info->flag_mem_usage)
-			print_progress(PROGRESS_UNN_PAGES, mm, info->num_mem_map);
+			print_progress(PROGRESS_UNN_PAGES, mm, info->num_mem_map, NULL);
 
 		mmd = &info->mem_map_data[mm];
 
@@ -5860,7 +5897,7 @@ exclude_unnecessary_pages(struct cycle *cycle)
 	 * print [100 %]
 	 */
 	if (!info->flag_mem_usage) {
-		print_progress(PROGRESS_UNN_PAGES, info->num_mem_map, info->num_mem_map);
+		print_progress(PROGRESS_UNN_PAGES, info->num_mem_map, info->num_mem_map, NULL);
 		print_execution_time(PROGRESS_UNN_PAGES, &tv_start);
 	}
 
@@ -7145,11 +7182,9 @@ int
 read_pfn(mdf_pfn_t pfn, unsigned char *buf)
 {
 	unsigned long long paddr;
-	int type_addr;
 
 	paddr = pfn_to_paddr(pfn);
-	type_addr = is_xen_memory() ? MADDR_XEN : PADDR;
-	if (!readmem(type_addr, paddr, buf, info->page_size)) {
+	if (!readmem(PADDR, paddr, buf, info->page_size)) {
 		ERRMSG("Can't get the page data.\n");
 		return FALSE;
 	}
@@ -7334,7 +7369,7 @@ write_elf_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
 				}
 
 				if ((num_dumped % per) == 0)
-					print_progress(PROGRESS_COPY, num_dumped, num_dumpable);
+					print_progress(PROGRESS_COPY, num_dumped, num_dumpable, &tv_start);
 
 				num_dumped++;
 
@@ -7453,7 +7488,7 @@ write_elf_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_page)
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable, &tv_start);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
 
@@ -7931,7 +7966,7 @@ write_kdump_pages_parallel_cyclic(struct cache_data *cd_header,
 		}
 
 		if ((num_dumped % per) == 0)
-			print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+			print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable, &tv_start);
 
 		num_dumped++;
 
@@ -7967,7 +8002,7 @@ finish:
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable, &tv_start);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
 
@@ -8084,7 +8119,7 @@ write_kdump_pages_cyclic(struct cache_data *cd_header, struct cache_data *cd_pag
 	for (pfn = start_pfn; pfn < end_pfn; pfn++) {
 
 		if ((num_dumped % per) == 0)
-			print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+			print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable, &tv_start);
 
 		/*
 		 * Check the excluded page.
@@ -8164,7 +8199,7 @@ out:
 		free(wrkmem);
 #endif
 
-	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable, &tv_start);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 
 	return ret;
@@ -8270,7 +8305,7 @@ write_eraseinfo(struct cache_data *cd_page, unsigned long *size_out)
 			}
 			sprintf(obuf, "erase %s %s", erase_info[i].symbol_expr,
 							size_str);
-			DEBUG_MSG(obuf);
+			DEBUG_MSG("%s", obuf);
 			if (!write_cache(cd_page, obuf, strlen(obuf)))
 				goto out;
 			size_eraseinfo += strlen(obuf);
@@ -8622,7 +8657,7 @@ write_kdump_pages_and_bitmap_cyclic(struct cache_data *cd_header, struct cache_d
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable);
+	print_progress(PROGRESS_COPY, num_dumped, info->num_dumpable, &tv_start);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 	PROGRESS_MSG("\n");
 
@@ -8635,6 +8670,7 @@ close_vmcoreinfo(void)
 	if(fclose(info->file_vmcoreinfo) < 0)
 		ERRMSG("Can't close the vmcoreinfo file(%s). %s\n",
 		    info->name_vmcoreinfo, strerror(errno));
+	info->file_vmcoreinfo = NULL;
 }
 
 void
@@ -9216,15 +9252,15 @@ exclude_xen3_user_domain(void)
 	 */
 	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 
-		print_progress(PROGRESS_XEN_DOMAIN, i, num_pt_loads);
+		print_progress(PROGRESS_XEN_DOMAIN, i, num_pt_loads, NULL);
 
 		pfn     = paddr_to_pfn(phys_start);
-		pfn_end = paddr_to_pfn(phys_end);
+		pfn_end = paddr_to_pfn(roundup(phys_end, PAGESIZE()));
 		size    = pfn_end - pfn;
 
 		for (j = 0; pfn < pfn_end; pfn++, j++) {
 			print_progress(PROGRESS_XEN_DOMAIN, j + (size * i),
-					size * num_pt_loads);
+					size * num_pt_loads, NULL);
 
 			if (!allocated_in_map(pfn)) {
 				clear_bit_on_2nd_bitmap(pfn, NULL);
@@ -9280,15 +9316,15 @@ exclude_xen4_user_domain(void)
 	 */
 	for (i = 0; get_pt_load(i, &phys_start, &phys_end, NULL, NULL); i++) {
 
-		print_progress(PROGRESS_XEN_DOMAIN, i, num_pt_loads);
+		print_progress(PROGRESS_XEN_DOMAIN, i, num_pt_loads, NULL);
 
 		pfn     = paddr_to_pfn(phys_start);
-		pfn_end = paddr_to_pfn(phys_end);
+		pfn_end = paddr_to_pfn(roundup(phys_end, PAGESIZE()));
 		size    = pfn_end - pfn;
 
 		for (j = 0; pfn < pfn_end; pfn++, j++) {
 			print_progress(PROGRESS_XEN_DOMAIN, j + (size * i),
-					size * num_pt_loads);
+					size * num_pt_loads, NULL);
 
 			page_info_addr = info->frame_table_vaddr + pfn * SIZE(page_info);
 			if (!readmem(VADDR_XEN,
@@ -9356,7 +9392,7 @@ exclude_xen_user_domain(void)
 	/*
 	 * print [100 %]
 	 */
-	print_progress(PROGRESS_XEN_DOMAIN, 1, 1);
+	print_progress(PROGRESS_XEN_DOMAIN, 1, 1, NULL);
 	print_execution_time(PROGRESS_XEN_DOMAIN, &tv_start);
 
 	return ret;
@@ -9765,7 +9801,7 @@ writeout_multiple_dumpfiles(void)
 	for (i = 0; i < info->num_dumpfile; i++) {
 		waitpid(array_pid[i], &status, WUNTRACED);
 		if (!WIFEXITED(status) || WEXITSTATUS(status) == 1) {
-			ERRMSG("Child process(%d) finished imcompletely.(%d)\n",
+			ERRMSG("Child process(%d) finished incompletely.(%d)\n",
 			    array_pid[i], status);
 			ret = FALSE;
 		} else if ((ret == TRUE) && (WEXITSTATUS(status) == 2))
@@ -9774,10 +9810,25 @@ writeout_multiple_dumpfiles(void)
 	return ret;
 }
 
+void
+update_dump_level(void)
+{
+	int new_level;
+
+	new_level = info->dump_level | info->kh_memory->dump_level;
+	if (new_level != info->dump_level) {
+		info->dump_level = new_level;
+		MSG("dump_level is changed to %d, " \
+			"because %s was created by dump_level(%d).",
+			new_level, info->name_memory,
+			info->kh_memory->dump_level);
+	}
+}
+
 int
 create_dumpfile(void)
 {
-	int num_retry, status, new_level;
+	int num_retry, status;
 
 	if (!open_files_for_creating_dumpfile())
 		return FALSE;
@@ -9786,6 +9837,10 @@ create_dumpfile(void)
 		if (!get_elf_info(info->fd_memory, info->name_memory))
 			return FALSE;
 	}
+
+	if (info->flag_refiltering)
+		update_dump_level();
+
 	if (!initial())
 		return FALSE;
 
@@ -9804,17 +9859,8 @@ create_dumpfile(void)
 
 	num_retry = 0;
 retry:
-	if (info->flag_refiltering) {
-		/* Change dump level */
-		new_level = info->dump_level | info->kh_memory->dump_level;
-		if (new_level != info->dump_level) {
-			info->dump_level = new_level;
-			MSG("dump_level is changed to %d, " \
-				"because %s was created by dump_level(%d).",
-				new_level, info->name_memory,
-				info->kh_memory->dump_level);
-		}
-	}
+	if (info->flag_refiltering)
+		update_dump_level();
 
 	if ((info->name_filterconfig || info->name_eppic_config)
 			&& !gather_filter_info())
@@ -10342,7 +10388,7 @@ reassemble_kdump_pages(void)
 
 			num_dumped++;
 
-			print_progress(PROGRESS_COPY, num_dumped, num_dumpable);
+			print_progress(PROGRESS_COPY, num_dumped, num_dumpable, &tv_start);
 
 			if (lseek(fd, offset_ph_org, SEEK_SET) < 0) {
 				ERRMSG("Can't seek a file(%s). %s\n",
@@ -10439,7 +10485,7 @@ reassemble_kdump_pages(void)
 						    size_eraseinfo))
 			goto out;
 	}
-	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable);
+	print_progress(PROGRESS_COPY, num_dumpable, num_dumpable, &tv_start);
 	print_execution_time(PROGRESS_COPY, &tv_start);
 
 	ret = TRUE;
@@ -10592,6 +10638,9 @@ check_param_for_creating_dumpfile(int argc, char *argv[])
 			return FALSE;
 		}
 	}
+
+	if (info->flag_partial_dmesg && !info->flag_dmesg)
+		return FALSE;
 
 	if ((argc == optind + 2) && !info->flag_flatten
 				 && !info->flag_split
@@ -10938,19 +10987,19 @@ int show_mem_usage(void)
 	struct cycle cycle = {0};
 
 	if (!is_crashkernel_mem_reserved()) {
-		ERRMSG("No memory is reserved for crashkenrel!\n");
+		ERRMSG("No memory is reserved for crashkernel!\n");
 		return FALSE;
 	}
 
 	info->dump_level = MAX_DUMP_LEVEL;
 
-	if (!get_page_offset())
-		return FALSE;
-
 	if (!open_files_for_creating_dumpfile())
 		return FALSE;
 
 	if (!get_elf_loads(info->fd_memory, info->name_memory))
+		return FALSE;
+
+	if (!get_page_offset())
 		return FALSE;
 
 	if (!get_sys_kernel_vmcoreinfo(&vmcoreinfo_addr, &vmcoreinfo_len))
@@ -10997,6 +11046,7 @@ static struct option longopts[] = {
 	{"message-level", required_argument, NULL, OPT_MESSAGE_LEVEL},
 	{"vtop", required_argument, NULL, OPT_VTOP},
 	{"dump-dmesg", no_argument, NULL, OPT_DUMP_DMESG},
+	{"partial-dmesg", no_argument, NULL, OPT_PARTIAL_DMESG},
 	{"config", required_argument, NULL, OPT_CONFIG},
 	{"help", no_argument, NULL, OPT_HELP},
 	{"diskset", required_argument, NULL, OPT_DISKSET},
@@ -11026,11 +11076,13 @@ main(int argc, char *argv[])
 		    strerror(errno));
 		goto out;
 	}
+	info->file_vmcoreinfo = NULL;
 	info->fd_vmlinux = -1;
 	info->fd_xen_syms = -1;
 	info->fd_memory = -1;
 	info->fd_dumpfile = -1;
 	info->fd_bitmap = -1;
+	info->kaslr_offset = 0;
 	initialize_tables();
 
 	/*
@@ -11107,6 +11159,9 @@ main(int argc, char *argv[])
 			break;
 		case OPT_DUMP_DMESG:
 			info->flag_dmesg = 1;
+			break;
+		case OPT_PARTIAL_DMESG:
+			info->flag_partial_dmesg = 1;
 			break;
 		case OPT_MEM_USAGE:
 		       info->flag_mem_usage = 1;
@@ -11267,6 +11322,12 @@ main(int argc, char *argv[])
 		if (!check_param_for_creating_dumpfile(argc, argv)) {
 			MSG("Commandline parameter is invalid.\n");
 			MSG("Try `makedumpfile --help' for more information.\n");
+			goto out;
+		}
+		if (info->kernel_version < KERNEL_VERSION(4, 11, 0) &&
+				!info->flag_force) {
+			MSG("mem-usage not supported for this kernel.\n");
+			MSG("You can try with -f if your kernel's kcore has valid p_paddr\n");
 			goto out;
 		}
 
