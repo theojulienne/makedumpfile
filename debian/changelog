@@ -75,6 +75,8 @@ makedumpfile (1:1.6.2-0.1) UNRELEASED; urgency=medium
         - [PATCH] Fix other typos in messages (by Atsushi Kumagai) b171374
         - [PATCH] Fix compiler warnings (by Eric DeVolder) 04dab93
 
+  * Update debian patches to latest release.
+
  -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Fri, 08 Sep 2017 16:21:35 -0300
 
 makedumpfile (1:1.6.1-2) sid; urgency=medium
