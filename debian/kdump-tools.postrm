@@ -21,6 +21,14 @@ case "$1" in
 	       ;;
        purge)
 		rm -rf /var/lib/kdump
+		if which ucf > /dev/null 2>&1; then
+			ucf --purge /etc/default/kdump-tools
+			ucfr -p kdump-tools /etc/default/kdump-tools
+		fi
+		rm -f /etc/default/kdump-tools
+		for i in new old dist; do
+			rm -f /etc/default/kdump-tools.ucf-$i
+		done
 	       ;;
 esac
 

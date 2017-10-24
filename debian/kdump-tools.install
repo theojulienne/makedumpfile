@@ -1,1 +1,2 @@
 debian/kdump-config	/usr/sbin
+debian/kdump-tools.conf /usr/share/kdump-tools/
