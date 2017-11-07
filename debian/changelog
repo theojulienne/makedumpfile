@@ -1,3 +1,19 @@
+makedumpfile (1:1.6.2-1) unstable; urgency=medium
+
+  [ Thadeu Lima de Souza Cascardo ]
+  * Add ucf support
+
+    /etc/default/kdump-tools was already changed by the maintainer script,
+    so it should not be a conffile. ucf allows the maintainer scripts to ask
+    the user about changes done by the user to the config file.
+
+    Invoking debconf first in the script is desired, because the frontend
+    might exec and invoke the script itself again. Also, we install the
+    generated file instead of the original file, as we will replace some of
+    the settings.  (Closes: 877250)
+
+ -- Louis Bouchard <louis@ubuntu.com>  Wed, 01 Nov 2017 14:50:26 +0100
+
 makedumpfile (1:1.6.2-0.1) unstable; urgency=medium
 
   * Non-maintainer upload.
