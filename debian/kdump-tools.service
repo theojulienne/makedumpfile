@@ -12,4 +12,4 @@ ExecStop=/etc/init.d/kdump-tools stop
 RemainAfterExit=yes
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target

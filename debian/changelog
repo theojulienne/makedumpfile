@@ -35,6 +35,8 @@ makedumpfile (1:1.6.3-1) UNRELEASED; urgency=medium
         - [PATCH] Fix the regression about getting kernel version (by Atsushi Kumagai) 254c116
         - [PATCH] Update maintainers (by Atsushi Kumagai) 9d3147e
 
+  * Use multi-user.target. (LP: #1708409)
+
  -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Tue, 06 Feb 2018 12:53:14 -0200
 
 makedumpfile (1:1.6.2-2) unstable; urgency=medium
