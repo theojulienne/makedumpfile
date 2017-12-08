@@ -51,7 +51,7 @@ KDUMP_NUM_DUMPS=${KDUMP_NUM_DUMPS:=0}
 NFS_TIMEO=${NFS_TIMEO:=600}
 NFS_RETRANS=${NFS_RETRANS:=3}
 MAKEDUMP_ARGS=${MAKEDUMP_ARGS:="-c -d 31"}
-KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service ata_piix.prefer_ms_hyperv=0"}
+KDUMP_CMDLINE_APPEND=${KDUMP_CMDLINE_APPEND:="@KDUMP_CMDLINE_APPEND@"}
 KDUMP_KERNEL_HOOK="/etc/kernel/postinst.d/kdump-tools"
 [ -d $KDUMP_COREDIR ] || mkdir -p $KDUMP_COREDIR ;
 

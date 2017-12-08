@@ -68,10 +68,10 @@ KDUMP_COREDIR="/var/crash"
 #     Set this variable to override /proc/cmdline.
 # KDUMP_CMDLINE_APPEND - Additional arguments to append to the command line 
 #     for the kdump kernel.  If unset, it defaults to
-#     "irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service ata_piix.prefer_ms_hyperv=0"
+#     "@KDUMP_CMDLINE_APPEND@"
 #KDUMP_KEXEC_ARGS=""
 #KDUMP_CMDLINE=""
-#KDUMP_CMDLINE_APPEND="irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service ata_piix.prefer_ms_hyperv=0"
+#KDUMP_CMDLINE_APPEND="@KDUMP_CMDLINE_APPEND@"
 
 # ---------------------------------------------------------------------------
 # Architecture specific Overrides:

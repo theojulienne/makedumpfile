@@ -7,6 +7,8 @@ else
 	SUBSTVARS = -Vdist:Depends="kexec-tools"
 endif
 
+KDUMP_CMDLINE_APPEND = irqpoll nr_cpus=1 nousb systemd.unit=kdump-tools.service ata_piix.prefer_ms_hyperv=0
+
 %:
 	dh $@ --with=systemd
 
@@ -16,7 +18,15 @@ override_dh_gencontrol:
 override_dh_auto_build:
 	dh_auto_build -- LINKTYPE=dynamic USELZO=on
 
-override_dh_install:
+kdump_cmdline_insert = sed "s/@KDUMP_CMDLINE_APPEND@/$(KDUMP_CMDLINE_APPEND)/" < $< > $@
+debian/kdump-config: debian/kdump-config.in
+	$(kdump_cmdline_insert)
+debian/kdump-tools.conf: debian/kdump-tools.conf.in
+	$(kdump_cmdline_insert)
+debian/kdump-tools.5: debian/kdump-tools.5.in
+	$(kdump_cmdline_insert)
+
+override_dh_install: debian/kdump-config debian/kdump-tools.conf debian/kdump-tools.5
 	dh_install
 	install -D -m 755 debian/kernel-postinst-generate-initrd debian/kdump-tools/etc/kernel/postinst.d/kdump-tools
 	install -D -m 755 debian/kernel-postrm-delete-initrd debian/kdump-tools/etc/kernel/postrm.d/kdump-tools
@@ -37,4 +47,5 @@ override_dh_installdeb:
 
 override_dh_auto_clean:
 	rm -f debian/kdump-tools.maintscript
+	rm -f debian/kdump-config debian/kdump-tools.conf debian/kdump-tools.5
 	dh_auto_clean
