@@ -2,6 +2,7 @@ makedumpfile (1:1.6.2-2) UNRELEASED; urgency=medium
 
   * Make the kdump kernel cmdline consistent in comments, code & docs.
   * Set reasonable default cmdlines for arm64.  (Closes: 883899)
+  * ppc64el: Remove ata_piix.prefer_ms_hyperv=0 from crashkernel cmdline
 
  -- dann frazier <dannf@debian.org>  Fri, 05 Jan 2018 09:43:58 -0700
 
