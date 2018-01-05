@@ -11,7 +11,7 @@ KDUMP_CMDLINE_APPEND = nr_cpus=1 systemd.unit=kdump-tools.service
 ifeq ($(DEB_HOST_ARCH),arm64)
 	# pass
 else ifeq ($(DEB_HOST_ARCH),ppc64el)
-	KDUMP_CMDLINE_APPEND += irqpoll nousb
+	KDUMP_CMDLINE_APPEND += irqpoll noirqdistrib nousb
 else
 	KDUMP_CMDLINE_APPEND += irqpoll nousb ata_piix.prefer_ms_hyperv=0
 endif
