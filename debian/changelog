@@ -6,6 +6,8 @@ makedumpfile (1:1.6.2-2) UNRELEASED; urgency=medium
   * ppc64el: Remove ata_piix.prefer_ms_hyperv=0 from crashkernel cmdline
   * ppc64el: add noirqdistrib to command line. (LP: #1658733)
   * Add myself to Uploaders.
+  * Build-Depend on debhelper (>= 9.20160709) instead of dh-systemd,
+    which is obsolete. Thanks lintian.
 
   [ Thadeu Lima de Souza Cascardo ]
   * Set crashkernel for ppc64el to load at 128M instead of 32M. That allows
