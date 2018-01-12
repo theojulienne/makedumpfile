@@ -5,6 +5,7 @@ makedumpfile (1:1.6.2-2) UNRELEASED; urgency=medium
   * Set reasonable default cmdlines for arm64.  (Closes: 883899)
   * ppc64el: Remove ata_piix.prefer_ms_hyperv=0 from crashkernel cmdline
   * ppc64el: add noirqdistrib to command line. (LP: #1658733)
+  * Add myself to Uploaders.
 
   [ Thadeu Lima de Souza Cascardo ]
   * Set crashkernel for ppc64el to load at 128M instead of 32M. That allows
