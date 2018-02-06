@@ -1,3 +1,42 @@
+makedumpfile (1:1.6.3-1) UNRELEASED; urgency=medium
+
+  * New upstream release. Main new feature:
+    o Support new kernels
+     - The supported kernel is updated to 4.14.8 in this version. (LP: #1746299)
+       4.14.9 and later can't be filtered correctly due to inappropriate VMCOREINFO,
+       it will be resolved in kernel 4.15.
+
+  * Changelog:
+    o New feature
+        - [PATCH v2] x86_64: Take care of init_level4_pgt rename in kernel (by Pratyush Anand) 64bd5db
+        - [PATCH v2] Fix SECTION_MAP_MASK for kernel >= v.13 (by Pratyush Anand) 4bf4f2b
+        - [PATCH v2] book3s/ppc64: Lower the max real address to 53 bits for kernels >= v4.11
+          (by Bhupesh Sharma) 6c83e74
+        - [PATCH v3 1/4] Support symbol __cpu_online_mask (by Takao Indoh) 3b11c00
+        - [PATCH] ppc64: update hash page table geometry (by Hari Bathini) 3c39f13
+        - [PATCH] handle renamed init_level4_pgt -> init_top_pgt (by Jeff Mahoney) 5e54d53
+
+    o Bugfix
+        - [PATCH v2] arm64: Fix page table walk of 1GB section (by Bradley Bolen) 27508f1
+        - [PATCH v2 1/2] ppc64: set page_offset in get_versiondep_info_ppc64() (by Pingfan Liu) 52319d2
+        - [PATCH v2 2/2] ppc64: get the info of mem reserved for crashkernel (by Pingfan Liu) c7fcbbc
+        - [PATCH v3 3/4] sadump: Fix a KASLR problem of sadump (by Takao Indoh) b4f7d95
+        - [PATCH v3 4/4] sadump: Fix a KASLR problem of sadump while kdump is working (by Takao Indoh) 13d3059
+        - [PATCH 2/2] Fix 'kernel_version' variable being uninitialized & introduce minor reorganization
+          (by Bhupesh Sharma) d1ffe82
+        - [PATCH 1/2] Fix off-by-one errors in exclude_segment() (by Petr Tesarik) 590f35e
+        - [PATCH 2/2] Fix physical-to-virtual conversion in exclude_segment() (by Petr Tesarik) 6c1bf2a
+
+    o Cleanup
+        - [PATCH] Fix formatting problems in header file (by Eric DeVolder) cefea9e
+        - [PATCH v3 2/4] Introduce vtop4_x86_64_pagetable (by Takao Indoh) 6de5d37
+        - [PATCH 1/2] Fix compilation warnings on ppc64/ppc64le platforms (by Bhupesh Sharma) 0df157a
+        - [PATCH] Make good use of is_cyclic_region() (by Atsushi Kumagai) 6bfd7a3
+        - [PATCH] Fix the regression about getting kernel version (by Atsushi Kumagai) 254c116
+        - [PATCH] Update maintainers (by Atsushi Kumagai) 9d3147e
+
+ -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Tue, 06 Feb 2018 12:53:14 -0200
+
 makedumpfile (1:1.6.2-2) unstable; urgency=medium
 
   [ dann frazier ]
