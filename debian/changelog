@@ -38,6 +38,7 @@ makedumpfile (1:1.6.3-1) UNRELEASED; urgency=medium
   * Use multi-user.target. (LP: #1708409)
   * kdump-tools Recommends initramfs-tools-core.
   * Add myself as uploader.
+  * Move Vcs control fields to salsa.
 
  -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Tue, 06 Feb 2018 12:53:14 -0200
 
