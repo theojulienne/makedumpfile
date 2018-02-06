@@ -1089,6 +1089,21 @@ fallback_to_current_page_size(void)
 	return TRUE;
 }
 
+static int populate_kernel_version(void)
+{
+	struct utsname utsname;
+
+	if (uname(&utsname)) {
+		ERRMSG("Cannot get name and information about current kernel : %s\n",
+		       strerror(errno));
+		return FALSE;
+	}
+
+	info->kernel_version = get_kernel_version(utsname.release);
+
+	return TRUE;
+}
+
 int
 check_release(void)
 {
@@ -1486,6 +1501,8 @@ get_symbol_info(void)
 	SYMBOL_INIT(_stext, "_stext");
 	SYMBOL_INIT(swapper_pg_dir, "swapper_pg_dir");
 	SYMBOL_INIT(init_level4_pgt, "init_level4_pgt");
+	SYMBOL_INIT(level4_kernel_pgt, "level4_kernel_pgt");
+	SYMBOL_INIT(init_top_pgt, "init_top_pgt");
 	SYMBOL_INIT(vmlist, "vmlist");
 	SYMBOL_INIT(vmap_area_list, "vmap_area_list");
 	SYMBOL_INIT(node_online_map, "node_online_map");
@@ -1517,8 +1534,13 @@ get_symbol_info(void)
 	SYMBOL_INIT(__per_cpu_load, "__per_cpu_load");
 	SYMBOL_INIT(__per_cpu_offset, "__per_cpu_offset");
 	SYMBOL_INIT(cpu_online_mask, "cpu_online_mask");
-	if (SYMBOL(cpu_online_mask) == NOT_FOUND_SYMBOL)
-		SYMBOL_INIT(cpu_online_mask, "cpu_online_map");
+	SYMBOL_INIT(__cpu_online_mask, "__cpu_online_mask");
+	if (SYMBOL(cpu_online_mask) == NOT_FOUND_SYMBOL) {
+		if (SYMBOL(__cpu_online_mask) == NOT_FOUND_SYMBOL)
+			SYMBOL_INIT(cpu_online_mask, "cpu_online_map");
+		else
+			SYMBOL_INIT(cpu_online_mask, "__cpu_online_mask");
+	}
 	SYMBOL_INIT(kexec_crash_image, "kexec_crash_image");
 	SYMBOL_INIT(node_remap_start_vaddr, "node_remap_start_vaddr");
 	SYMBOL_INIT(node_remap_end_vaddr, "node_remap_end_vaddr");
@@ -1546,6 +1568,10 @@ get_symbol_info(void)
 	SYMBOL_INIT(cpu_pgd, "cpu_pgd");
 	SYMBOL_INIT(demote_segment_4k, "demote_segment_4k");
 	SYMBOL_INIT(cur_cpu_spec, "cur_cpu_spec");
+
+	SYMBOL_INIT(divide_error, "divide_error");
+	SYMBOL_INIT(idt_table, "idt_table");
+	SYMBOL_INIT(saved_command_line, "saved_command_line");
 
 	return TRUE;
 }
@@ -2105,6 +2131,8 @@ write_vmcoreinfo_data(void)
 	WRITE_SYMBOL("_stext", _stext);
 	WRITE_SYMBOL("swapper_pg_dir", swapper_pg_dir);
 	WRITE_SYMBOL("init_level4_pgt", init_level4_pgt);
+	WRITE_SYMBOL("level4_kernel_pgt", level4_kernel_pgt);
+	WRITE_SYMBOL("init_top_pgt", init_top_pgt);
 	WRITE_SYMBOL("vmlist", vmlist);
 	WRITE_SYMBOL("vmap_area_list", vmap_area_list);
 	WRITE_SYMBOL("node_online_map", node_online_map);
@@ -2241,6 +2269,13 @@ write_vmcoreinfo_data(void)
 	WRITE_NUMBER_UNSIGNED("PHYS_OFFSET", PHYS_OFFSET);
 	WRITE_NUMBER_UNSIGNED("kimage_voffset", kimage_voffset);
 #endif
+
+	if (info->phys_base)
+		fprintf(info->file_vmcoreinfo, "%s%lu\n", STR_NUMBER("phys_base"),
+			info->phys_base);
+	if (info->kaslr_offset)
+		fprintf(info->file_vmcoreinfo, "%s%lx\n", STR_KERNELOFFSET,
+			info->kaslr_offset);
 
 	/*
 	 * write the source file of 1st kernel
@@ -2500,6 +2535,8 @@ read_vmcoreinfo(void)
 	READ_SYMBOL("_stext", _stext);
 	READ_SYMBOL("swapper_pg_dir", swapper_pg_dir);
 	READ_SYMBOL("init_level4_pgt", init_level4_pgt);
+	READ_SYMBOL("level4_kernel_pgt", level4_kernel_pgt);
+	READ_SYMBOL("init_top_pgt", init_top_pgt);
 	READ_SYMBOL("vmlist", vmlist);
 	READ_SYMBOL("vmap_area_list", vmap_area_list);
 	READ_SYMBOL("node_online_map", node_online_map);
@@ -3300,7 +3337,10 @@ section_mem_map_addr(unsigned long addr)
 		return NOT_KV_ADDR;
 	}
 	map = ULONG(mem_section + OFFSET(mem_section.section_mem_map));
-	map &= SECTION_MAP_MASK;
+	if (info->kernel_version < KERNEL_VERSION(4, 13, 0))
+		map &= SECTION_MAP_MASK_4_12;
+	else
+		map &= SECTION_MAP_MASK;
 	free(mem_section);
 
 	return map;
@@ -4203,7 +4243,7 @@ set_bitmap_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, int val, struct cyc
 	int byte, bit;
 	static int warning = 0;
 
-        if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn) {
+        if (!is_cyclic_region(pfn, cycle)) {
 		if (warning == 0) {
 			MSG("WARNING: PFN out of cycle range. (pfn:%llx, ", pfn);
 			MSG("cycle:[%llx-%llx])\n", cycle->start_pfn, cycle->end_pfn);
@@ -9401,15 +9441,15 @@ exclude_xen_user_domain(void)
 int
 initial_xen(void)
 {
-	int xen_info_required = TRUE;
-	off_t offset;
-	unsigned long size;
-
 #if defined(__powerpc64__) || defined(__powerpc32__)
 	MSG("\n");
 	MSG("Xen is not supported on powerpc.\n");
 	return FALSE;
 #else
+	int xen_info_required = TRUE;
+	off_t offset;
+	unsigned long size;
+
 #ifndef __x86_64__
 	if (DL_EXCLUDE_ZERO < info->max_dump_level) {
 		MSG("Dump_level is invalid. It should be 0 or 1.\n");
@@ -10925,6 +10965,9 @@ int is_crashkernel_mem_reserved(void)
 {
 	int ret;
 
+	if (arch_crashkernel_mem_size())
+		return TRUE;
+
 	ret = iomem_for_each_line("Crash kernel\n",
 					crashkernel_mem_callback, NULL);
 	crash_reserved_mem_nr = ret;
@@ -10934,19 +10977,13 @@ int is_crashkernel_mem_reserved(void)
 
 static int get_page_offset(void)
 {
-	struct utsname utsname;
-	if (uname(&utsname)) {
-		ERRMSG("Cannot get name and information about current kernel : %s",
-		       strerror(errno));
+	if (!populate_kernel_version())
 		return FALSE;
-	}
 
-	info->kernel_version = get_kernel_version(utsname.release);
 	get_versiondep_info();
 
 	return TRUE;
 }
-
 
 /* Returns the physical address of start of crash notes buffer for a kernel. */
 static int get_sys_kernel_vmcoreinfo(uint64_t *addr, uint64_t *len)
@@ -11324,6 +11361,9 @@ main(int argc, char *argv[])
 			MSG("Try `makedumpfile --help' for more information.\n");
 			goto out;
 		}
+		if (!populate_kernel_version())
+			goto out;
+
 		if (info->kernel_version < KERNEL_VERSION(4, 11, 0) &&
 				!info->flag_force) {
 			MSG("mem-usage not supported for this kernel.\n");

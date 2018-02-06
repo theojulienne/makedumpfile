@@ -45,6 +45,7 @@
 #include "sadump_mod.h"
 #include <pthread.h>
 #include <semaphore.h>
+#include <inttypes.h>
 
 #define VMEMMAPSTART 0xffffea0000000000UL
 #define BITS_PER_WORD 64
@@ -183,7 +184,9 @@ isAnon(unsigned long mapping)
 #define SECTIONS_PER_ROOT()	(info->sections_per_root)
 #define SECTION_ROOT_MASK()	(SECTIONS_PER_ROOT() - 1)
 #define SECTION_NR_TO_ROOT(sec)	((sec) / SECTIONS_PER_ROOT())
-#define SECTION_MAP_LAST_BIT	(1UL<<2)
+#define SECTION_IS_ONLINE	(1UL<<2)
+#define SECTION_MAP_LAST_BIT	(1UL<<3)
+#define SECTION_MAP_MASK_4_12	(~(SECTION_IS_ONLINE-1))
 #define SECTION_MAP_MASK	(~(SECTION_MAP_LAST_BIT-1))
 #define NR_SECTION_ROOTS()	divideup(num_section, SECTIONS_PER_ROOT())
 #define SECTION_NR_TO_PFN(sec)	((sec) << PFN_SECTION_SHIFT())
@@ -475,7 +478,7 @@ do { \
 #define KVER_MIN_SHIFT 16
 #define KERNEL_VERSION(x,y,z) (((x) << KVER_MAJ_SHIFT) | ((y) << KVER_MIN_SHIFT) | (z))
 #define OLDEST_VERSION		KERNEL_VERSION(2, 6, 15)/* linux-2.6.15 */
-#define LATEST_VERSION		KERNEL_VERSION(4, 11, 7)/* linux-4.11.7 */
+#define LATEST_VERSION		KERNEL_VERSION(4, 14, 8)/* linux-4.14.8 */
 
 /*
  * vmcoreinfo in /proc/vmcore
@@ -666,6 +669,9 @@ unsigned long get_kvbase_arm64(void);
 #define PGD_INDEX_SIZE_L4_64K_3_10  12
 #define PMD_INDEX_SIZE_L4_64K_4_6  5
 #define PUD_INDEX_SIZE_L4_64K_4_6  5
+#define PMD_INDEX_SIZE_L4_64K_4_12 10
+#define PUD_INDEX_SIZE_L4_64K_4_12 7
+#define PGD_INDEX_SIZE_L4_64K_4_12 8
 #define PTE_INDEX_SIZE_RADIX_64K  5
 #define PMD_INDEX_SIZE_RADIX_64K  9
 #define PUD_INDEX_SIZE_RADIX_64K  9
@@ -688,6 +694,11 @@ unsigned long get_kvbase_arm64(void);
 #define PGD_MASKED_BITS_4_7  0xc0000000000000ffUL
 #define PUD_MASKED_BITS_4_7  0xc0000000000000ffUL
 #define PMD_MASKED_BITS_4_7  0xc0000000000000ffUL
+
+#define PTE_RPN_SIZE_L4_4_11  53
+#define PTE_RPN_MASK_L4_4_11   \
+	(((1UL << PTE_RPN_SIZE_L4_4_11) - 1) & ~((1UL << info->page_shift) - 1))
+#define PTE_RPN_SHIFT_L4_4_11  info->page_shift
 
 /*
  * Supported MMU types
@@ -933,6 +944,7 @@ int get_xen_info_arm64(void);
 #define get_xen_basic_info_arch(X) get_xen_basic_info_arm64(X)
 #define get_xen_info_arch(X) get_xen_info_arm64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif /* aarch64 */
 
 #ifdef __arm__
@@ -946,6 +958,7 @@ unsigned long long vaddr_to_paddr_arm(unsigned long vaddr);
 #define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_arm(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif /* arm */
 
 #ifdef __x86__
@@ -959,6 +972,7 @@ unsigned long long vaddr_to_paddr_x86(unsigned long vaddr);
 #define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_x86(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif /* x86 */
 
 #ifdef __x86_64__
@@ -967,6 +981,7 @@ int get_phys_base_x86_64(void);
 int get_machdep_info_x86_64(void);
 int get_versiondep_info_x86_64(void);
 unsigned long long vtop4_x86_64(unsigned long vaddr);
+unsigned long long vtop4_x86_64_pagetable(unsigned long vaddr, unsigned long pagetable);
 #define find_vmemmap()		find_vmemmap_x86_64()
 #define get_phys_base()		get_phys_base_x86_64()
 #define get_machdep_info()	get_machdep_info_x86_64()
@@ -974,12 +989,14 @@ unsigned long long vtop4_x86_64(unsigned long vaddr);
 #define get_kaslr_offset(X)	get_kaslr_offset_x86_64(X)
 #define vaddr_to_paddr(X)	vtop4_x86_64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif /* x86_64 */
 
 #ifdef __powerpc64__ /* powerpc64 */
 int get_machdep_info_ppc64(void);
 int get_versiondep_info_ppc64(void);
 unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
+int arch_crashkernel_mem_size_ppc64(void);
 #define find_vmemmap()		stub_false()
 #define get_phys_base()		stub_true()
 #define get_machdep_info()	get_machdep_info_ppc64()
@@ -987,6 +1004,7 @@ unsigned long long vaddr_to_paddr_ppc64(unsigned long vaddr);
 #define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	arch_crashkernel_mem_size_ppc64()
 #endif          /* powerpc64 */
 
 #ifdef __powerpc32__ /* powerpc32 */
@@ -999,6 +1017,7 @@ unsigned long long vaddr_to_paddr_ppc(unsigned long vaddr);
 #define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ppc(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif          /* powerpc32 */
 
 #ifdef __s390x__ /* s390x */
@@ -1012,6 +1031,7 @@ int is_iomem_phys_addr_s390x(unsigned long addr);
 #define get_kaslr_offset(X)	stub_false()
 #define vaddr_to_paddr(X)	vaddr_to_paddr_s390x(X)
 #define is_phys_addr(X)		is_iomem_phys_addr_s390x(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif          /* s390x */
 
 #ifdef __ia64__ /* ia64 */
@@ -1026,6 +1046,7 @@ unsigned long long vaddr_to_paddr_ia64(unsigned long vaddr);
 #define vaddr_to_paddr(X)	vaddr_to_paddr_ia64(X)
 #define VADDR_REGION(X)		(((unsigned long)(X)) >> REGION_SHIFT)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif          /* ia64 */
 
 #ifdef __sparc64__ /* sparc64 */
@@ -1038,6 +1059,7 @@ unsigned long long vaddr_to_paddr_sparc64(unsigned long vaddr);
 #define get_versiondep_info()   get_versiondep_info_sparc64()
 #define vaddr_to_paddr(X)       vaddr_to_paddr_sparc64(X)
 #define is_phys_addr(X)		stub_true_ul(X)
+#define arch_crashkernel_mem_size()	stub_false()
 #endif		/* sparc64 */
 
 typedef unsigned long long mdf_pfn_t;
@@ -1517,6 +1539,8 @@ struct symbol_table {
 	unsigned long long	_stext;
 	unsigned long long	swapper_pg_dir;
 	unsigned long long	init_level4_pgt;
+	unsigned long long	level4_kernel_pgt;
+	unsigned long long	init_top_pgt;
 	unsigned long long	vmlist;
 	unsigned long long	vmap_area_list;
 	unsigned long long	phys_base;
@@ -1578,7 +1602,11 @@ struct symbol_table {
 	unsigned long long	__per_cpu_offset;
 	unsigned long long	__per_cpu_load;
 	unsigned long long	cpu_online_mask;
+	unsigned long long	__cpu_online_mask;
 	unsigned long long	kexec_crash_image;
+	unsigned long long	divide_error;
+	unsigned long long	idt_table;
+	unsigned long long	saved_command_line;
 
 	/*
 	 * symbols on ppc64 arch
@@ -1939,7 +1967,8 @@ int iomem_for_each_line(char *match, int (*callback)(void *data, int nr,
 						     unsigned long base,
 						     unsigned long length),
 			void *data);
-
+int is_bigendian(void);
+int get_symbol_info(void);
 
 /*
  * for Xen extraction
@@ -2096,9 +2125,18 @@ is_on(char *bitmap, mdf_pfn_t i)
 }
 
 static inline int
-is_dumpable_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
+is_cyclic_region(mdf_pfn_t pfn, struct cycle *cycle)
 {
 	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
+		return FALSE;
+	else
+		return TRUE;
+}
+
+static inline int
+is_dumpable_buffer(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
+{
+	if (!is_cyclic_region(pfn, cycle))
 		return FALSE;
 	else
 		return is_on(bitmap->buf, pfn - cycle->start_pfn);
@@ -2137,15 +2175,6 @@ is_dumpable(struct dump_bitmap *bitmap, mdf_pfn_t pfn, struct cycle *cycle)
 	} else {
 		return is_dumpable_file(bitmap, pfn);
 	}
-}
-
-static inline int
-is_cyclic_region(mdf_pfn_t pfn, struct cycle *cycle)
-{
-	if (pfn < cycle->start_pfn || cycle->end_pfn <= pfn)
-		return FALSE;
-	else
-		return TRUE;
 }
 
 static inline int
@@ -2244,7 +2273,7 @@ struct elf_prstatus {
 #define OPT_DEBUG               'D'
 #define OPT_DUMP_LEVEL          'd'
 #define OPT_ELF_DUMPFILE        'E'
-#define OPT_EXCLUDE_UNUSED_VM	'e'
+#define OPT_EXCLUDE_UNUSED_VM   'e'
 #define OPT_FLATTEN             'F'
 #define OPT_FORCE               'f'
 #define OPT_GENERATE_VMCOREINFO 'g'
@@ -2271,10 +2300,10 @@ struct elf_prstatus {
 #define OPT_EPPIC               OPT_START+11
 #define OPT_NON_MMAP            OPT_START+12
 #define OPT_MEM_USAGE           OPT_START+13
-#define OPT_SPLITBLOCK_SIZE	OPT_START+14
+#define OPT_SPLITBLOCK_SIZE     OPT_START+14
 #define OPT_WORKING_DIR         OPT_START+15
-#define OPT_NUM_THREADS	OPT_START+16
-#define OPT_PARTIAL_DMESG	OPT_START+17
+#define OPT_NUM_THREADS         OPT_START+16
+#define OPT_PARTIAL_DMESG       OPT_START+17
 
 /*
  * Function Prototype.
