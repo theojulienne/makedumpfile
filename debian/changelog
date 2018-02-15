@@ -1,3 +1,9 @@
+makedumpfile (1:1.6.3-2) UNRELEASED; urgency=medium
+
+  * Add support for SPARSEMEM_EXTREME mem_section as a pointer. (LP: #1750021)
+
+ -- Thadeu Lima de Souza Cascardo <cascardo@debian.org>  Mon, 05 Mar 2018 09:28:55 -0300
+
 makedumpfile (1:1.6.3-1) unstable; urgency=medium
 
   * New upstream release. Main new feature:
