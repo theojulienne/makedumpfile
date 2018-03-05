@@ -897,6 +897,7 @@ case "$1" in
 		fadump_register
 	else
 		check_kdump_support;
+		kdump_create_symlinks $KVER;
 		manage_symlinks;
 		locate_kdump_kernel;
 		kdump_load
