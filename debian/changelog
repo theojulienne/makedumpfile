@@ -1,4 +1,4 @@
-makedumpfile (1:1.6.3-2) UNRELEASED; urgency=medium
+makedumpfile (1:1.6.3-2) unstable; urgency=medium
 
   * Add support for SPARSEMEM_EXTREME mem_section as a pointer. (LP: #1750021)
   * Add an autopkgtest that test that a crash produces a compressed dump
