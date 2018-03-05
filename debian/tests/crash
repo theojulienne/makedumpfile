@@ -1,0 +1,50 @@
+#!/bin/bash
+
+function error()
+{
+	echo "makedumpfile: ERROR: crash test: $@"
+}
+
+function report()
+{
+	echo "makedumpfile: crash test: $@"
+}
+
+case "$AUTOPKGTEST_REBOOT_MARK" in
+  "")
+	report "rebooting to have crashkernel on cmdline"
+	/tmp/autopkgtest-reboot crashkernel
+	;;
+  crashkernel)
+	report "checking for crashkernel"
+	if ! grep crashkernel /proc/cmdline > /dev/null; then
+		error "no crashkernel option on cmdline"
+		exit 1
+	fi
+	report "checking kdump-config status"
+	if ! kdump-config status | grep ": ready to kdump" > /dev/null; then
+		error "kdump is not ready"
+		exit 1
+	fi
+	/tmp/autopkgtest-reboot-prepare crash
+	echo 1 > /proc/sys/kernel/sysrq
+	echo c > /proc/sysrq-trigger
+	;;
+  crash)
+	report "checking for crash file"
+	found=false
+	for i in `find /var/crash/ -name dump.*`; do
+		if file $i | grep 'Kdump compressed dump' > /dev/null; then
+			report "Found compressed dump at $i"
+			found=true
+		else
+			error "$i is not a compressed dump"
+			exit 1
+		fi
+	done
+	if [ "$found" = "false" ]; then
+		error "Found no compressed dumps"
+		exit 1
+	fi
+	;;
+esac
